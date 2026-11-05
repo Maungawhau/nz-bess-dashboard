@@ -1,1 +1,1 @@
-{"generated_utc":null,"warnings":[],"settings":{"tight_market":{"price_threshold":300,"headroom_threshold_mw":400,"headroom_price_cap":1000}}}
+{"generated_utc":"2026-11-05T23:18Z","first_date":"2026-01-01","last_date":"2026-11-04","settings":{"tight_market":{"price_threshold":300,"headroom_threshold_mw":400,"headroom_price_cap":1000},"reference_nodes":{"NI":"OTA2201","SI":"BEN2201"}},"warnings":["2026-11-05: cleared offers or energy prices not yet published"]}
