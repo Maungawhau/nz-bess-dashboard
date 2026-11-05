@@ -57,9 +57,10 @@ COLUMNS = {
     "product": ["ProductType", "Type", "OfferType", "ClearedType", "Product"],
     "reserve_type": ["ReserveType", "ProductClass", "ReserveClass", "ProductDescription"],
     "mw": ["ClearedMW", "ClearedMegawatts", "Megawatts", "MW", "Cleared", "ClearedQuantity"],
-    "mw_energy": ["ClearedEnergy", "ClearedEnergyMW", "Energy"],
-    "mw_fir": ["ClearedFIR", "ClearedFIRMW", "FIR"],
-    "mw_sir": ["ClearedSIR", "ClearedSIRMW", "SIR"],
+    "mw_energy": ["ClearedGenerationMegawatts", "ClearedEnergy", "ClearedEnergyMW", "ClearedEnergyMegawatts", "Energy"],
+    "mw_fir": ["ClearedFIRMegawatts", "ClearedFIR", "ClearedFIRMW", "FIR"],
+    "mw_sir": ["ClearedSIRMegawatts", "ClearedSIR", "ClearedSIRMW", "SIR"],
+    "flow": ["ProductClass", "FlowDirection", "Direction"],
     "price": ["DollarsPerMegawattHour", "Price", "PriceDollarsPerMegawattHour", "DollarsPerMWh", "Dollars"],
     "load_mw": ["LoadMW", "Load", "LoadMegawatts", "DispatchedLoad"],
     "gen_mw": ["GenerationMW", "Generation", "GenerationMegawatts", "DispatchedGeneration"],
@@ -67,7 +68,7 @@ COLUMNS = {
     "is_latest": ["IsLatestYesNo", "IsLatest"],
     "fuel": ["FuelType", "Fuel", "Fuel_Code", "FuelCode", "PrimaryFuel"],
     "tech": ["Technology", "Tech_Code", "TechCode", "GenerationType", "PlantType"],
-    "name": ["StationName", "Name", "PlantName", "Station", "GeneratingPlantName"],
+    "name": ["PlantName", "StationName", "Name", "PlantName", "Station", "GeneratingPlantName"],
     "capacity": ["NameplateCapacityMW", "Capacity", "MaxOutputMW", "NameplateMW", "CapacityMW"],
 }
 
@@ -197,9 +198,12 @@ def load(key: str, d: date, wanted: list[str]) -> pd.DataFrame | None:
     for c in ("mw", "mw_energy", "mw_fir", "mw_sir", "price", "load_mw", "gen_mw", "capacity"):
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
-    for c in ("poc", "unit", "trader", "island", "product", "reserve_type"):
+    for c in ("poc", "unit", "trader", "island", "product", "reserve_type", "flow", "name"):
         if c in df.columns:
-            df[c] = df[c].astype(str).str.strip()
+            df[c] = df[c].fillna("").astype(str).str.strip()
+    if "island" in df.columns:  # "North Island" / "NI" / "N" -> NI|SI
+        u = df["island"].str.upper()
+        df["island"] = u.where(~u.str.startswith(("N", "S")), u.str[0] + "I")
     return df
 
 

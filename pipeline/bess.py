@@ -28,8 +28,8 @@ def classify(product: pd.Series, reserve_type: pd.Series | None) -> pd.Series:
 
 def cleared_long(d: date) -> pd.DataFrame | None:
     """Cleared offers for a day in long form: date, tp, island, poc, unit, trader, kind, mw (avg MW over the TP)."""
-    df = emi.load("cleared_offers", d, ["date", "tp", "interval", "island", "poc", "unit", "trader",
-                                        "product", "reserve_type", "mw", "mw_energy", "mw_fir", "mw_sir"])
+    df = emi.load("cleared_offers", d, ["date", "tp", "interval", "island", "poc", "unit", "trader", "flow",
+                                        "mw_energy", "mw_fir", "mw_sir", "product", "reserve_type", "mw"])
     if df is None:
         return None
     if "tp" not in df.columns or df["tp"].isna().all():
@@ -44,10 +44,14 @@ def cleared_long(d: date) -> pd.DataFrame | None:
 
     if {"mw_energy", "mw_fir", "mw_sir"} & set(df.columns) and "mw" not in df.columns:
         # wide format: one row per offer, separate cleared columns
-        id_cols = [c for c in ("date", "tp", "interval", "island", "poc", "unit", "trader") if c in df.columns]
+        id_cols = [c for c in ("date", "tp", "interval", "island", "poc", "unit", "trader", "flow") if c in df.columns]
         m = df.melt(id_vars=id_cols, value_vars=[c for c in ("mw_energy", "mw_fir", "mw_sir") if c in df.columns],
                     var_name="kind", value_name="mw")
         m["kind"] = m["kind"].map({"mw_energy": "energy", "mw_fir": "fir", "mw_sir": "sir"})
+        if "flow" in m.columns:  # ProductClass: Injection (generation) vs offtake/withdrawal (dispatched charging)
+            offtake = m["flow"].str.upper().str.contains("OFFTAKE|WITHDRAW|LOAD|DEMAND|PURCHAS|CONSUM")
+            m.loc[offtake & (m["kind"] == "energy"), "kind"] = "bid"
+        m["mw"] = m["mw"].fillna(0)
         df = m
     else:
         emi.require(df, ["mw", "product"], "cleared_offers")

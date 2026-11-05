@@ -35,15 +35,18 @@ def main():
         df = emi.read_csv(path)
         say(f"rows: {len(df):,}\n\ncolumns: `{list(df.columns)}`\n")
         say("```\n" + df.head(4).to_string()[:3000] + "\n```")
-        txt = df.astype(str).agg(" ".join, axis=1)
+        txt = df.fillna("").astype(str).agg(" ".join, axis=1)
         if key == "fleet":
             hit = df[txt.str.upper().str.contains(r"\bBAT|BATTERY|BESS")]
             say(f"\nbattery rows ({len(hit)}):\n```\n{hit.to_string()[:4000]}\n```")
         else:
+            bat = df[txt.str.upper().str.contains(r"BATTER|BESS|\bBAT\b|ROTOHIKO|RUAK|OHURUA")]
+            if len(bat):
+                say(f"\nbattery-named rows: {len(bat)}; distinct: \n```\n{bat.drop_duplicates(subset=[c for c in bat.columns if 'Code' in c or 'Name' in c or c in ('Island','ProductClass')]).head(30).to_string()[:5000]}\n```")
             for p in pocs + ["HLY", "GLN", "BRB"]:
                 h = df[txt.str.contains(p, regex=False)]
                 if len(h):
-                    say(f"\n{p}: {len(h)} rows, e.g.\n```\n{h.head(6).to_string()[:2500]}\n```")
+                    say(f"\n{p}: {len(h)} rows, e.g.\n```\n{h.drop_duplicates(subset=[c for c in h.columns if "Code" in c or "Class" in c or "Name" in c] or None).head(12).to_string()[:2500]}\n```")
         say("")
     open("probe_report.md", "w").write("\n".join(lines))
 
