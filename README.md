@@ -38,7 +38,7 @@ Edit `config/bess.yaml`, copy a block, fill in the connection point (POC), the i
 3. **Put this code in it**: either let Claude push it (connect GitHub in Claude and share the repo name), or use **Add file → Upload files** and drag in the whole folder contents, including the hidden `.github` folder.
 4. **Let the job push data**: go to **Settings → Actions → General → Workflow permissions**, choose *Read and write permissions* and save.
 5. **Check the data layout**: go to **Actions → Probe EMI schemas → Run workflow**. When it finishes, open the run. The summary shows the real column names and battery codes. Fix any `# verify` codes in `config/bess.yaml` (or ask Claude to, with the report).
-6. **Back-fill**: go to **Actions → Nightly BESS update → Run workflow**. Each run processes up to 60 new days, so run it 5–6 times (or leave it to the nightly schedule) to fill the history from 1 January 2026.
+6. **Back-fill**: go to **Actions → Nightly BESS update → Run workflow**. One run back-fills the whole history from 1 January 2026 (about 15 seconds per day).
 7. **Publish the dashboard**: go to **Settings → Pages → Build and deployment**, choose *Deploy from a branch*, select `main` and `/docs`, and save. The dashboard appears at `https://<your-username>.github.io/nz-bess-dashboard/`.
 
 ## Running locally
