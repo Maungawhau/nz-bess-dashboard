@@ -53,7 +53,7 @@ COLUMNS = {
     "island": ["Island", "IslandCode"],
     "poc": ["PointOfConnection", "PointOfConnectionCode", "PNode", "Node", "POC", "NodeCode", "GridPointOfConnection"],
     "unit": ["Unit", "UnitCode", "GenerationUnit"],
-    "trader": ["Trader", "ParticipantCode", "TraderCode", "Participant"],
+    "trader": ["Trader", "ParticipantCode", "PlantOperatorCode", "TraderCode", "Participant"],
     "product": ["ProductType", "Type", "OfferType", "ClearedType", "Product"],
     "reserve_type": ["ReserveType", "ProductClass", "ReserveClass", "ProductDescription"],
     "mw": ["ClearedMW", "ClearedMegawatts", "Megawatts", "MW", "Cleared", "ClearedQuantity"],
@@ -61,15 +61,18 @@ COLUMNS = {
     "mw_fir": ["ClearedFIRMegawatts", "ClearedFIR", "ClearedFIRMW", "FIR"],
     "mw_sir": ["ClearedSIRMegawatts", "ClearedSIR", "ClearedSIRMW", "SIR"],
     "flow": ["ProductClass", "FlowDirection", "Direction"],
+    "fir_price": ["FIRDollarsPerMegawattHour", "FIRPrice"],
+    "sir_price": ["SIRDollarsPerMegawattHour", "SIRPrice"],
     "price": ["DollarsPerMegawattHour", "Price", "PriceDollarsPerMegawattHour", "DollarsPerMWh", "Dollars"],
-    "load_mw": ["LoadMW", "Load", "LoadMegawatts", "DispatchedLoad"],
-    "gen_mw": ["GenerationMW", "Generation", "GenerationMegawatts", "DispatchedGeneration"],
+    "load_mw": ["LoadMegawatts", "LoadMW", "Load", "LoadMegawatts", "DispatchedLoad"],
+    "gen_mw": ["GenerationMegawatts", "GenerationMW", "Generation", "GenerationMegawatts", "DispatchedGeneration"],
     "tranche": ["Tranche", "Band", "TrancheNumber"],
     "is_latest": ["IsLatestYesNo", "IsLatest"],
-    "fuel": ["FuelType", "Fuel", "Fuel_Code", "FuelCode", "PrimaryFuel"],
-    "tech": ["Technology", "Tech_Code", "TechCode", "GenerationType", "PlantType"],
+    "fuel": ["FuelType", "Fuel", "FuelCode", "Fuel_Code", "FuelCode", "PrimaryFuel"],
+    "tech": ["TechnologyCode", "Technology", "Tech_Code", "TechCode", "GenerationType", "PlantType"],
     "name": ["PlantName", "StationName", "Name", "PlantName", "Station", "GeneratingPlantName"],
-    "capacity": ["NameplateCapacityMW", "Capacity", "MaxOutputMW", "NameplateMW", "CapacityMW"],
+    "decommissioned": ["DateDecommissioned"],
+    "capacity": ["NameplateMegawatts", "NameplateCapacityMW", "Capacity", "MaxOutputMW", "NameplateMW", "CapacityMW"],
 }
 
 
@@ -170,6 +173,11 @@ def _exists(path: str) -> bool:
         return False
 
 
+def usecols_for(wanted: list[str]):
+    keep = {_norm(c) for w in wanted for c in COLUMNS[w]}
+    return lambda col: _norm(col) in keep
+
+
 def read_csv(path: str, **kw) -> pd.DataFrame:
     """Read an EMI CSV (cached on disk for the duration of a run)."""
     if LOCAL_DIR:
@@ -190,7 +198,7 @@ def load(key: str, d: date, wanted: list[str]) -> pd.DataFrame | None:
     path = find_file(key, d)
     if path is None:
         return None
-    df = resolve(read_csv(path), wanted, key)
+    df = resolve(read_csv(path, usecols=usecols_for(wanted)), wanted, key)
     if "date" in df.columns:
         df["date"] = parse_dates(df["date"])
     if "tp" in df.columns:

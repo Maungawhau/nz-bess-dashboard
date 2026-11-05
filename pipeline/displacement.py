@@ -78,7 +78,7 @@ def compute_day(d: date, co: pd.DataFrame, tp_bess: pd.DataFrame, registry: list
     if need.empty:
         return pd.DataFrame()
 
-    off = emi.load("offers", d, ["date", "tp", "poc", "unit", "trader", "product", "tranche",
+    off = emi.load("offers", d, ["date", "tp", "poc", "unit", "trader", "product", "flow", "tranche",
                                  "mw", "price", "is_latest"])
     if off is None:
         return pd.DataFrame()
@@ -88,11 +88,16 @@ def compute_day(d: date, co: pd.DataFrame, tp_bess: pd.DataFrame, registry: list
     if "is_latest" in off.columns:
         off = off[off["is_latest"].astype(str).str.upper().str.startswith("Y")]
     if "product" in off.columns:
-        off = off[off["product"].str.upper().str.contains("EN")]
+        off = off[off["product"].str.upper().str.startswith("EN")]
+    if "flow" in off.columns:
+        off = off[off["flow"].str.upper().str.startswith("INJ")]
     if "unit" not in off.columns:
         off["unit"] = ""
-    bess_pocs = {b["poc"].upper() for b in registry if b.get("poc")}
-    off = off[~off["poc"].str.upper().isin(bess_pocs) & (off["mw"] > 0)]
+    bess_units = {(b["poc"].upper(), str(u).upper()) for b in registry if b.get("poc")
+                  for u in (b.get("gen_unit"), b.get("load_unit")) if u}
+    key = list(zip(off["poc"].str.upper(), off["unit"].str.upper()))
+    off = off[[k not in bess_units for k in key]]
+    off = off[off["mw"] > 0]
 
     isl = co.dropna(subset=["island"]).drop_duplicates("poc").set_index("poc")["island"].str.upper().str[:2]
     isl = isl.replace({"NO": "NI", "SO": "SI"})

@@ -34,40 +34,33 @@ def load_fleet():
     p = emi.latest_file("fleet")
     if not p:
         return None
-    df = emi.resolve(emi.read_csv(p), ["poc", "unit", "fuel", "tech", "name", "capacity", "trader"], "fleet")
-    for c in ("poc", "unit", "fuel", "tech", "name"):
+    want = ["poc", "unit", "fuel", "tech", "name", "capacity", "trader", "decommissioned"]
+    df = emi.resolve(emi.read_csv(p, usecols=emi.usecols_for(want)), want, "fleet")
+    for c in ("poc", "unit", "fuel", "tech", "name", "trader"):
         if c in df.columns:
             df[c] = df[c].astype(str).str.strip()
     return df
 
 
 def autodetect(fleet, registry, warnings):
-    """Add batteries present in EMI's fleet file but missing from config (flagged for confirmation)."""
-    if fleet is None or "poc" not in fleet.columns:
+    """Add batteries in EMI's plant list (tech BAT) that aren't in the config - flagged for confirmation."""
+    if fleet is None or "poc" not in fleet.columns or "unit" not in fleet.columns:
         return registry
-    txt = (fleet.get("fuel", "").astype(str) + " " + fleet.get("tech", "").astype(str)).str.upper()
-    bat = fleet[txt.str.contains(r"\bBAT|BATTERY|BESS")]
-    known_pocs = {str(b.get("poc") or "").upper() for b in registry}
-    for b in registry:   # fill unknown POCs by name match (e.g. Huntly)
-        if not b.get("poc"):
-            key = b["name"].split()[0].upper()[:5]
-            hit = bat[bat.get("name", pd.Series("", index=bat.index)).str.upper().str.contains(key)]
-            if not hit.empty:
-                b["poc"] = hit.iloc[0]["poc"]
-                b["charge_poc"] = b.get("charge_poc") or b["poc"]
-                b["auto"] = True
-                warnings.append(f"{b['id']}: POC auto-detected as {b['poc']} from fleet file - confirm and hard-code in config")
-                known_pocs.add(b["poc"].upper())
-    for _, r in bat.iterrows():
-        if r["poc"].upper() in known_pocs:
+    txt = (fleet["fuel"].astype(str) if "fuel" in fleet else "") + " " + (fleet["tech"].astype(str) if "tech" in fleet else "")
+    bat = fleet[txt.str.upper().str.contains(r"\bBAT|BATTERY|BESS")]
+    if "decommissioned" in bat.columns:
+        bat = bat[bat["decommissioned"].isna()]
+    known = {(str(b.get("poc")).upper(), str(u).upper()) for b in registry for u in (b.get("gen_unit"), b.get("load_unit")) if u}
+    for _, r in bat.drop_duplicates(["poc", "unit"]).iterrows():
+        if (r["poc"].upper(), r["unit"].upper()) in known:
             continue
-        nid = f"auto_{r['poc'].lower()}"
-        registry.append({"id": nid, "name": str(r.get("name", r["poc"])), "owner": str(r.get("trader", "")),
+        nid = f"auto_{r['unit'].lower()}"
+        registry.append({"id": nid, "name": str(r.get("name", r["unit"])), "owner": str(r.get("trader", "")),
                          "island": "NI", "power_mw": float(r.get("capacity", 0) or 0), "energy_mwh": None,
-                         "commissioned": "2000-01-01", "poc": r["poc"], "unit": None,
-                         "charge_source": "nodal_load", "charge_poc": r["poc"], "auto": True})
-        known_pocs.add(r["poc"].upper())
-        warnings.append(f"New battery auto-detected at {r['poc']} ({r.get('name', '')}) - add it to config/bess.yaml")
+                         "commissioned": "2000-01-01", "poc": r["poc"], "gen_unit": r["unit"], "load_unit": None,
+                         "auto": True})
+        warnings.append(f"New battery auto-detected: {r.get('name', '')} at {r['poc']}/{r['unit']} - add it (with its "
+                        f"offtake unit) to config/bess.yaml; until then charging is not counted")
     return registry
 
 
@@ -119,14 +112,14 @@ def run(start=None, end=None, skip_displacement=False):
     new_tp, new_disp, done_days = [], [], []
     for d in days:
         try:
-            t, w = B.compute_day(d, registry, settings)
+            co = B.cleared_long(d)
+            t, w = B.compute_day(d, registry, settings, co)
             warnings += w
             if t.empty:
                 continue
             new_tp.append(t)
             done_days.append(d)
             if not skip_displacement:
-                co = B.cleared_long(d)
                 x = D.compute_day(d, co, t, registry, fmap, settings)
                 if not x.empty:
                     new_disp.append(x)

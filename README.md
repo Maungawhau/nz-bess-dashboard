@@ -20,16 +20,16 @@ GitHub Pages serves docs/ → the dashboard
 
 | EMI dataset | Used for |
 |---|---|
-| DispatchAndPricing/ClearedOffers | Discharge MW, FIR/SIR cleared MW (and charging bids where a battery has them) |
+| DispatchAndPricing/ClearedOffers | Discharge MW (injection unit), FIR/SIR cleared MW (both units) |
 | DispatchAndPricing/FinalEnergyPrices | Node price for each half-hour |
 | DispatchAndPricing/FinalReservePrices | FIR/SIR price for each island |
-| DispatchAndPricing/NodalPricesAndVolumes | Charging (load at the battery's own connection point) |
+| DispatchAndPricing/NodalPricesAndVolumes | Charging (dispatched load on the offtake unit) |
 | BidsAndOffers/Offers | Offer stack for the displacement analysis |
 | Generation/GenerationFleet/Existing | Fuel tags and automatic detection of new batteries |
 
 ## Adding a new battery
 
-Edit `config/bess.yaml`, copy a block, fill in the connection point (POC) and commission date, then commit. The next nightly run back-fills it from `start_date`. Batteries that EMI's plant list tags `BAT` but that aren't in the config are added automatically, show as *auto-detected* on the dashboard, and are listed in the data notes.
+Edit `config/bess.yaml`, copy a block, fill in the connection point (POC), the injection and offtake unit codes, and the commission date, then commit. The next nightly run back-fills it from `start_date`. Batteries that EMI's plant list tags `BAT` but that aren't in the config are added automatically, show as *auto-detected* on the dashboard, and are listed in the data notes.
 
 ## One-time setup (about 15 minutes)
 
@@ -57,7 +57,7 @@ EMI_LOCAL_DIR=tests/fixtures BESS_CONFIG=tests/bess_test.yaml python -m pipeline
 ## Caveats
 
 - **Gross spot value, not profit.** Hedges, frequency keeping, constrained-on payments, transmission and reserve cost allocation, and losses are excluded.
-- **Charging.** Batteries aren't yet dispatched when charging. The EA's decision moves them to a single bid/offer form and one dispatch instruction from 31 March 2028. Until then, charging comes from load at the battery's own connection point. Where that point is shared with other load (Rotohiko), charging isn't observable.
+- **Charging.** Each battery has an injection unit and an offtake unit in EMI (e.g. Ruakākā RUK0/RUK99), and charging is the dispatched load on the offtake unit. The EA's decision moves batteries to a single bid/offer form from 31 March 2028; when that happens the unit mapping will need updating.
 - **Displacement is indicative.** It is a merit-order shift that ignores transmission constraints, the HVDC link, energy/reserve co-optimisation, ramping and unit commitment.
 
 ## Next iteration ideas

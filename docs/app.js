@@ -101,7 +101,7 @@ function summaryTable(rows) {
     if (!s) { html += `<tr><td>${b.name}</td><td colspan="${H.length - 1}" style="text-align:left" class="muted">no data in range</td></tr>`; continue; }
     const dp = s.discharge_mwh ? s.discharge_rev / s.discharge_mwh : NaN, cp = s.charge_mwh ? s.charge_cost / s.charge_mwh : NaN;
     const active = Math.min(days, s._n);
-    const flag = b.auto ? '<span class="badge">auto-detected</span>' : b.charge_source !== "nodal_load" ? '<span class="badge">charging partial</span>' : "";
+    const flag = b.auto ? '<span class="badge">auto-detected</span>' : !b.load_unit ? '<span class="badge">no charging data</span>' : "";
     html += `<tr><td><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${colorOf(b.id)};margin-right:6px"></span>${b.name}${flag}</td>
       <td>${fmtN(b.power_mw)} / ${fmtN(b.energy_mwh)}</td><td>${fmtN(s.discharge_mwh)}</td><td>${fmtN(s.charge_mwh)}</td>
       <td>${s.charge_mwh ? fmtN((100 * s.discharge_mwh) / s.charge_mwh) + "%" : "–"}</td>

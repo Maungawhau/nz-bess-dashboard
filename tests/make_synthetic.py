@@ -23,13 +23,19 @@ UNITS = [
     ("SFD2201", "SFD21", "CTCT", "NI", "Gas", [(50, 330), (50, 420)]),
     ("MKE1101", "MKE", "TODD", "NI", "Gas", [(100, 360)]),
     ("BEN2202", "BEN", "MERI", "SI", "Hydro", [(500, 30), (300, 80)]),
+    ("GLN0332", "GLN0", "NZSC", "NI", "Gas", [(26, 0.01)]),
 ]
-BESS = [("BRB0331", "BRB", "MERI", 100, date(2025, 5, 28)), ("GLN0332", "GLN", "CTCT", 100, date(2026, 1, 20))]
+BESS = [("BRB0331", "RUK0", "MERI", 100, date(2025, 5, 28)), ("GLN0332", "GLB0", "CTCT", 100, date(2026, 1, 20))]
+LOADU = {"RUK0": "RUK99", "GLB0": "GLB99"}
 
 
 def demand_shape(tp):
     h = (tp - 0.5) / 2
     return 1250 + 420 * np.exp(-((h - 8) / 1.6) ** 2) + 600 * np.exp(-((h - 18.5) / 1.8) ** 2) - 250 * np.exp(-((h - 3.5) / 2.5) ** 2)
+
+
+def ts(d, tp):
+    return (pd.Timestamp(d).tz_localize("Pacific/Auckland") + pd.Timedelta(minutes=30 * (tp - 1))).isoformat()
 
 
 def write(path, df):
@@ -69,50 +75,57 @@ def day(base, d):
         price = price if need <= 0 else 5000
         price *= rng.uniform(0.95, 1.05)
         for (p, u, tr), mw in clr.items():
-            co.append([d.isoformat(), tp, "NI", p, u, tr, "Energy", "", round(mw, 2)])
+            co.append([d.isoformat(), tp, ts(d, tp), "Injection", p, u, "North Island", tr, round(mw, 2), None, None])
         for p, u, tr, isl, f, trs in UNITS:
             for i, (mw, pr) in enumerate(trs, 1):
-                offers.append([d.isoformat(), tp, p, u, tr, "Energy", "", i, mw, pr, "Y"])
+                offers.append([d.isoformat(), tp, p, u, tr, "Energy", "Injection", "", i, mw, pr, "Y"])
         for (poc, unit, tr, mw, com) in BESS:
             if poc not in bess_mw:
                 continue
             v = bess_mw[poc]
             if v > 0:
-                co.append([d.isoformat(), tp, "NI", poc, unit, tr, "Energy", "", round(v, 2)])
-            else:
-                co.append([d.isoformat(), tp, "NI", poc, unit, tr, "Reserve", "FIR", round(min(60, mw + v), 2)])
-                co.append([d.isoformat(), tp, "NI", poc, unit, tr, "Reserve", "SIR", round(min(40, mw + v), 2)])
-            nv.append([d.isoformat(), tp, poc, round(max(-v, 0), 2), round(max(v, 0), 2), price])
-            offers.append([d.isoformat(), tp, poc, unit, tr, "Energy", "", 1, mw, 150, "Y"])
+                co.append([d.isoformat(), tp, ts(d, tp), "Injection", poc, unit, "North Island", tr, round(v, 2), None, None])
+            elif v == 0:
+                co.append([d.isoformat(), tp, ts(d, tp), "Injection", poc, unit, "North Island", tr, None, 40.0, 30.0])
+            else:  # charging: interruptible load reserve from the offtake unit
+                co.append([d.isoformat(), tp, ts(d, tp), "Offtake", poc, LOADU[unit], "North Island", tr, None, round(-v * 0.5, 2), round(-v * 0.4, 2)])
+            nv.append([d.isoformat(), tp, ts(d, tp), poc, LOADU[unit], round(max(-v, 0), 2), round(max(v, 0) * 0, 2), price])
+            nv.append([d.isoformat(), tp, ts(d, tp), poc, unit, 0.0, round(max(v, 0), 2), price])
+            offers.append([d.isoformat(), tp, poc, unit, tr, "Energy", "Injection", "", 1, mw, 150, "Y"])
         for poc in ("OTA2201", "BRB0331", "GLN0332", "HLY2201"):
             ep.append([d.isoformat(), tp, poc, round(price * (1.03 if poc == "BRB0331" else 1.0), 2)])
         ep.append([d.isoformat(), tp, "BEN2201", round(price * 0.9, 2)])
         for isl in ("NI", "SI"):
-            rp.append([d.isoformat(), tp, isl, "FIR", round(rng.uniform(0.5, 15), 2)])
-            rp.append([d.isoformat(), tp, isl, "SIR", round(rng.uniform(0.2, 6), 2)])
-        nv.append([d.isoformat(), tp, "OTA2201", round(L * 0.3, 1), 0, price])
+            rp.append([d.isoformat(), tp, isl, round(rng.uniform(0.5, 15), 2), round(rng.uniform(0.2, 6), 2)])
+        nv.append([d.isoformat(), tp, ts(d, tp), "OTA2201", "", round(L * 0.3, 1), 0, price])
+        nv.append([d.isoformat(), tp, ts(d, tp), "GLN0332", "", 41.0, 0, price])   # steel load at shared POC
     y = d.year
     write(f"{base}/{R}/DispatchAndPricing/ClearedOffers/{y}/{s}_ClearedOffers.csv",
-          pd.DataFrame(co, columns=["TradingDate", "TradingPeriod", "Island", "PointOfConnection", "Unit", "Trader",
-                                    "ProductType", "ReserveType", "ClearedMW"]))
+          pd.DataFrame(co, columns=["TradingDate", "TradingPeriodNumber", "IntervalDateTime", "ProductClass", "PointOfConnectionCode",
+                                    "UnitCode", "Island", "ParticipantCode", "ClearedGenerationMegawatts", "ClearedFIRMegawatts", "ClearedSIRMegawatts"]))
     write(f"{base}/{R}/BidsAndOffers/Offers/{y}/{s}_Offers.csv",
           pd.DataFrame(offers, columns=["TradingDate", "TradingPeriod", "PointOfConnection", "Unit", "ParticipantCode",
-                                        "ProductType", "ReserveType", "Tranche", "Megawatts", "DollarsPerMegawattHour", "IsLatestYesNo"]))
+                                        "ProductType", "ProductClass", "ReserveType", "Tranche", "Megawatts", "DollarsPerMegawattHour", "IsLatestYesNo"]))
     write(f"{base}/{R}/DispatchAndPricing/FinalEnergyPrices/{s}_FinalEnergyPrices.csv",
           pd.DataFrame(ep, columns=["TradingDate", "TradingPeriod", "PointOfConnection", "DollarsPerMegawattHour"]))
     write(f"{base}/{R}/DispatchAndPricing/FinalReservePrices/{s}_FinalReservePrices.csv",
-          pd.DataFrame(rp, columns=["TradingDate", "TradingPeriod", "Island", "ReserveType", "DollarsPerMegawattHour"]))
+          pd.DataFrame(rp, columns=["TradingDate", "TradingPeriod", "Island", "FIRDollarsPerMegawattHour", "SIRDollarsPerMegawattHour"]))
     write(f"{base}/{R}/DispatchAndPricing/NodalPricesAndVolumes/{y}/{s}_DispatchNodalPricesAndVolumes.csv",
-          pd.DataFrame(nv, columns=["TradingDate", "TradingPeriod", "PointOfConnection", "LoadMW", "GenerationMW", "DollarsPerMegawattHour"]))
+          pd.DataFrame(nv, columns=["TradingDate", "TradingPeriodNumber", "IntervalDateTime", "PointOfConnectionCode", "UnitCode",
+                                    "LoadMegawatts", "GenerationMegawatts", "DollarsPerMegawattHour"]))
 
 
 if __name__ == "__main__":
     base, a, b = sys.argv[1], date.fromisoformat(sys.argv[2]), date.fromisoformat(sys.argv[3])
-    fleet = [[p, u, f, f, n, sum(m for m, _ in t)] for p, u, tr, isl, f, t in UNITS for n in [p[:3]]]
-    fleet += [["BRB0331", "BRB", "ELE", "BAT", "Ruakaka BESS", 100], ["GLN0332", "GLN", "ELE", "BAT", "Glenbrook BESS", 100],
-              ["HLY2202", "HLYB", "ELE", "BAT", "Huntly BESS", 100]]
-    write(f"{base}/{R}/Generation/GenerationFleet/Existing/20261001_DispatchedGenerationPlant.csv",
-          pd.DataFrame(fleet, columns=["PointOfConnection", "Unit", "FuelType", "Technology", "StationName", "NameplateCapacityMW"]))
+    fleet = [[n, p, u, f[:3].upper(), f, f, sum(m for m, _ in t), None] for p, u, tr, isl, f, t in UNITS for n in [p[:3]]]
+    fleet += [["Ruakaka Energy Park", "BRB0331", "RUK0", "BAT", "Chemical battery energy", "Electrical energy", 100, None],
+              ["Glenbrook-Ohurua Battery", "GLN0332", "GLB0", "BAT", "Chemical battery energy", "Electrical energy", 100, None],
+              ["Huntly Battery", "HLY2201", "HLY11", "BAT", "Chemical battery energy", "Electrical energy", 100, None],
+              ["Southdown Battery", "SWN2201", "SWN1", "BAT", "Chemical battery energy", "Electrical energy", 1, "23/05/2022"],
+              ["New Battery", "NEW0331", "NEW0", "BAT", "Chemical battery energy", "Electrical energy", 50, None]]
+    write(f"{base}/{R}/Generation/GenerationFleet/Existing/20260702_DispatchedGenerationPlant.csv",
+          pd.DataFrame(fleet, columns=["PlantName", "PointOfConnectionCode", "UnitCode", "TechnologyCode", "Technology", "Fuel",
+                                       "NameplateMegawatts", "DateDecommissioned"]))
     d = a
     while d <= b:
         day(base, d)
