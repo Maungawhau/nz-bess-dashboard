@@ -94,7 +94,7 @@ summary{cursor:pointer;color:var(--text-secondary)}
   <div class="card">
     <h2>Battery summary for the selected period</h2>
     <div class="tablewrap"><table id="sumTable"></table></div>
-    <div class="muted" style="margin-top:6px">Spread = average discharge price − average charge price. Cycles = discharge MWh ÷ energy capacity. RTE (round-trip) = discharge ÷ charge MWh; a value above 100% means charging data is incomplete.</div>
+    <div class="muted" style="margin-top:6px">Spread = average discharge price − average charge price. Cycles = discharge MWh ÷ energy capacity. RTE (round-trip) = discharge ÷ charge MWh from dispatch data. It reads low for batteries that mostly sit on reserve: their small top-up and auxiliary charging is dispatched, but the energy they deliver when reserves are triggered isn't. Over short windows it can also exceed 100% when the battery ends the period emptier than it started.</div>
   </div>
 
   <div class="section-title">Battery detail</div>
