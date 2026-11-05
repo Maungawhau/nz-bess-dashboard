@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NZ BESS dispatch &amp; revenue</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+<style>
+.viz-root{
+  color-scheme:light;
+  --surface-0:#f4f3f0; --surface-1:#fcfcfb; --border:#e3e2dd; --grid:#ecebe7;
+  --text-primary:#0b0b0b; --text-secondary:#52514e; --text-muted:#7a7974;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#e87ba4; --s6:#008300; --s7:#6250d6; --s8:#e34948;
+  --neutral:#a3a29c; --accent:#2a78d6; --warn:#fab219;
+}
+@media (prefers-color-scheme:dark){
+  :root:where(:not([data-theme="light"])) .viz-root{
+    color-scheme:dark;
+    --surface-0:#111110; --surface-1:#1a1a19; --border:#2e2e2b; --grid:#262624;
+    --text-primary:#f0efec; --text-secondary:#c3c2b7; --text-muted:#8f8e86;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --s6:#008300; --s7:#9085e9; --s8:#e66767;
+    --neutral:#6b6a64; --accent:#3987e5;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.viz-root{background:var(--surface-0);color:var(--text-primary);min-height:100vh;padding:24px clamp(12px,3vw,40px) 60px}
+header{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 24px;margin-bottom:16px}
+h1{font-size:22px;margin:0;font-weight:650}
+h2{font-size:16px;margin:0 0 4px;font-weight:620}
+.sub{color:var(--text-secondary);font-size:13px}
+.muted{color:var(--text-muted);font-size:12px}
+.filters{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;gap:12px 20px;align-items:center;
+  background:var(--surface-0);padding:10px 0 12px;border-bottom:1px solid var(--border);margin-bottom:18px}
+.seg{display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.seg button{border:0;background:var(--surface-1);color:var(--text-secondary);padding:6px 12px;font:inherit;cursor:pointer}
+.seg button+button{border-left:1px solid var(--border)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:#fff}
+label.f{display:inline-flex;gap:6px;align-items:center;color:var(--text-secondary);font-size:13px}
+input[type=date],select{font:inherit;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--surface-1);color:var(--text-primary)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{display:inline-flex;gap:6px;align-items:center;border:1px solid var(--border);border-radius:999px;padding:4px 10px;background:var(--surface-1);cursor:pointer;font-size:13px;user-select:none}
+.chip input{margin:0}
+.chip .sw{width:10px;height:10px;border-radius:3px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:18px}
+.tile{background:var(--surface-1);border:1px solid var(--border);border-radius:10px;padding:12px 14px}
+.tile .k{color:var(--text-secondary);font-size:12px}
+.tile .v{font-size:24px;font-weight:650;font-variant-numeric:tabular-nums;margin-top:2px}
+.tile .d{color:var(--text-muted);font-size:12px}
+.card{background:var(--surface-1);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:16px}
+.card-head{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;align-items:flex-start;margin-bottom:6px}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(460px,1fr));gap:16px}
+.chart{width:100%;height:340px}
+.chart.tall{height:380px}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;font-size:13px}
+th,td{padding:6px 8px;border-bottom:1px solid var(--grid);text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--text-secondary);font-weight:600;position:sticky;top:0;background:var(--surface-1)}
+.tablewrap{overflow:auto;max-height:440px}
+.badge{display:inline-block;font-size:11px;padding:1px 6px;border-radius:4px;border:1px solid var(--border);color:var(--text-secondary);margin-left:6px}
+details{margin-top:8px}
+summary{cursor:pointer;color:var(--text-secondary)}
+.note{color:var(--text-secondary);font-size:13px;max-width:900px}
+.warn li{color:var(--text-secondary);font-size:12px}
+.section-title{margin:26px 0 10px;font-size:18px;font-weight:650}
+</style>
+</head>
+<body>
+<div class="viz-root">
+  <header>
+    <h1>NZ grid-scale BESS: dispatch &amp; revenue</h1>
+    <span class="sub" id="coverage">Loading…</span>
+  </header>
+
+  <div class="filters" role="toolbar" aria-label="Filters">
+    <div class="seg" id="gran" role="group" aria-label="Period">
+      <button data-g="day">Day</button><button data-g="week">Week</button><button data-g="month" aria-pressed="true">Month</button><button data-g="year">Year</button>
+    </div>
+    <label class="f">From <input type="date" id="from"></label>
+    <label class="f">To <input type="date" id="to"></label>
+    <div class="chips" id="bessChips" aria-label="Batteries"></div>
+  </div>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="card">
+    <div class="card-head">
+      <div><h2>Total revenue, all selected BESS</h2><div class="muted">Arbitrage (energy sold minus energy bought at the battery node) plus FIR and SIR reserve revenue</div></div>
+      <div class="seg" id="revSplit"><button data-s="bess" aria-pressed="true">By battery</button><button data-s="stream">By revenue stream</button></div>
+    </div>
+    <div id="revChart" class="chart tall"></div>
+  </div>
+
+  <div class="card">
+    <h2>Battery summary for the selected period</h2>
+    <div class="tablewrap"><table id="sumTable"></table></div>
+    <div class="muted" style="margin-top:6px">Spread = average discharge price − average charge price. Cycles = discharge MWh ÷ energy capacity. RTE (round-trip) = discharge ÷ charge MWh; a value above 100% means charging data is incomplete.</div>
+  </div>
+
+  <div class="section-title">Battery detail</div>
+  <div class="filters" style="position:static;border:0;padding-top:0">
+    <label class="f">Battery <select id="detailBess"></select></label>
+    <label class="f">Profile month <select id="profMonth"></select></label>
+  </div>
+  <div class="grid2">
+    <div class="card"><h2>Charge &amp; discharge volume</h2><div class="muted">MWh per period; charging is shown below zero</div><div id="volChart" class="chart"></div></div>
+    <div class="card"><h2>Captured prices</h2><div class="muted">Volume-weighted $/MWh at the battery node vs. the time-weighted node average</div><div id="priceChart" class="chart"></div></div>
+    <div class="card"><h2>Average day: dispatch by trading period</h2><div class="muted">Mean MW across the selected month: discharge (+), charge (−), FIR and SIR cleared</div><div id="profChart" class="chart"></div></div>
+    <div class="card"><h2>Average day: node price</h2><div class="muted">Mean $/MWh by trading period, same month</div><div id="profPriceChart" class="chart"></div></div>
+  </div>
+
+  <div class="section-title">What would have run instead? Indicative thermal displacement</div>
+  <div class="card">
+    <div class="card-head">
+      <div><h2>BESS discharge by the plant it displaced</h2><div class="muted">MWh. For each trading period with battery discharge, the next uncleared offers in the island's stack, tagged by fuel. Covers all batteries, regardless of the battery filter.</div></div>
+      <div class="seg" id="tightSel"><button data-t="all" aria-pressed="true">All periods</button><button data-t="tight">Tight periods only</button></div>
+    </div>
+    <div id="dispChart" class="chart tall"></div>
+  </div>
+  <div class="card">
+    <h2>Tightest periods with battery discharge</h2>
+    <div class="muted">Tight = island reference price ≥ <span id="tPrice"></span> $/MWh, or less than <span id="tHead"></span> MW of uncleared offers below $<span id="tCap"></span>. “Shortfall MW” = battery output that the remaining stack could not have replaced.</div>
+    <div class="tablewrap"><table id="tightTable"></table></div>
+  </div>
+
+  <div class="card">
+    <h2>Method &amp; data notes</h2>
+    <div class="note">
+      <p><b>Source.</b> Electricity Authority EMI public datasets, refreshed nightly: cleared offers (real-time dispatch), final energy and reserve prices, dispatch nodal volumes (charging), bids and offers (merit order) and the dispatched generation plant list (fuel tags, new batteries).</p>
+      <p><b>Revenue.</b> Arbitrage = Σ discharge MWh × node price − Σ charge MWh × node price, per half-hour. Reserves = cleared FIR/SIR MW × island reserve price × 0.5 h. This excludes hedges, frequency keeping, constrained-on payments, transmission and reserve cost allocation, and losses, so it is gross spot market value, not owner profit.</p>
+      <p><b>Charging.</b> Most batteries aren't yet dispatched when charging, so charging is taken from metered or dispatch load at the battery's own connection point. Where that point is shared with other load (e.g. distribution-connected Rotohiko), charging isn't observable and arbitrage overstates the battery's net revenue. The data notes below flag this.</p>
+      <p><b>Displacement.</b> A merit-order shift on final offers. It ignores transmission constraints, HVDC re-optimisation, energy/reserve co-optimisation, ramping and start-up decisions. Read it as “who sits behind the batteries in the stack”, not as a settlement-grade counterfactual.</p>
+    </div>
+    <details><summary>Data notes from the last run (<span id="nWarn">0</span>)</summary><ul class="warn" id="warnList"></ul></details>
+  </div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

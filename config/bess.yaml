@@ -1,0 +1,84 @@
+# ---------------------------------------------------------------------------
+# NZ grid-scale BESS registry
+#
+# To add a new battery: copy one block, give it a new id, fill in the codes,
+# commit. The nightly job picks it up and back-fills from `commissioned`
+# (or from settings.start_date, whichever is later).
+#
+# Batteries flagged BAT in EMI's DispatchedGenerationPlant file that are NOT
+# listed here are auto-detected and shown on the dashboard with an
+# "auto-detected - please confirm codes" note.
+#
+# Codes marked `# verify` were taken from public sources and must be confirmed
+# against the first probe run (Actions -> "Probe EMI schemas").
+# ---------------------------------------------------------------------------
+
+settings:
+  start_date: 2026-01-01          # first trading date in the history
+  reprocess_days: 4               # re-run the last N days each night (interim -> final prices)
+  max_new_days_per_run: 60        # back-fill in chunks so one run stays well under GitHub's 6h limit
+  reference_nodes: {NI: OTA2201, SI: BEN2201}
+  tight_market:
+    price_threshold: 300          # $/MWh island reference price at/above which a TP is "tight"
+    headroom_threshold_mw: 400    # or: uncleared energy offered below $1,000 in the island < this
+    headroom_price_cap: 1000
+  thermal_prefixes:               # fallback fuel tagging if the fleet file lacks a fuel code
+    HLY: coal/gas                 # Huntly Rankines (coal/gas), e3p, unit 6 (gas)
+    SFD: gas                      # Stratford peakers
+    MKE: gas                      # McKee
+    JRD: gas                      # Junction Road
+    TRC: gas
+    WHI: diesel                   # Whirinaki
+
+bess:
+  - id: ruakaka
+    name: Ruakākā BESS
+    owner: Meridian
+    island: NI
+    power_mw: 100
+    energy_mwh: 200
+    commissioned: 2025-05-28
+    poc: BRB0331                  # verify
+    unit: null                    # set if the POC also hosts the solar farm (e.g. BRB0331 unit code)
+    trader: MERI                  # verify
+    charge_source: nodal_load     # nodal_load | cleared_bid | none
+    charge_poc: BRB0331
+
+  - id: glenbrook
+    name: Glenbrook-Ohurua BESS
+    owner: Contact
+    island: NI
+    power_mw: 100
+    energy_mwh: 200
+    commissioned: 2026-05-25
+    poc: GLN0332                  # verify
+    unit: null
+    trader: CTCT                  # verify
+    charge_source: nodal_load
+    charge_poc: GLN0332
+
+  - id: rotohiko
+    name: Rotohiko BESS
+    owner: NewPower / WEL
+    island: NI
+    power_mw: 35
+    energy_mwh: 35
+    commissioned: 2023-11-01
+    poc: HLY0331                  # verify - distribution-connected; POC shared with other load
+    unit: null
+    trader: null
+    charge_source: cleared_bid    # NewPower says it is dispatched when charging; falls back to none
+    charge_poc: null
+
+  - id: huntly
+    name: Huntly BESS (stage 1)
+    owner: Genesis
+    island: NI
+    power_mw: 100
+    energy_mwh: 200
+    commissioned: 2026-10-20
+    poc: null                     # unknown - filled from fleet file auto-detection, then hard-code it here
+    unit: null
+    trader: GENE                  # verify
+    charge_source: nodal_load
+    charge_poc: null
