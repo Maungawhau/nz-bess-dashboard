@@ -136,21 +136,6 @@ function detail() {
     { type: "scatter", mode: "lines+markers", name: "Buy (charge)", x, y: keys.map((k) => pr(k, "charge_cost", "charge_mwh")), line: { color: css("--s2"), width: 2 }, marker: { size: 8 } },
     { type: "scatter", mode: "lines", name: "Node average", x, y: keys.map((k) => m.get(k).node_price_avg / m.get(k)._n), line: { color: css("--neutral"), width: 2, dash: "dot" } },
   ], layout({ xaxis: pAxis(), yaxis: { ...layout().yaxis, tickprefix: "$", title: { text: "$/MWh" } }, hovermode: "x unified" }), cfg);
-
-  const month = $("#profMonth").value;
-  const p = D.profile.filter((r) => r.bess === id && r.month === month).sort((a, b2) => a.tp - b2.tp);
-  const tpx = p.map((r) => r.tp);
-  const tpLabel = (tp) => { const mins = (tp - 1) * 30; return `${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`; };
-  const tl = tpx.map(tpLabel);
-  Plotly.react("profChart", [
-    { type: "bar", name: "Discharge", x: tl, y: p.map((r) => r.discharge_mw), marker: { color: c } },
-    { type: "bar", name: "Charge", x: tl, y: p.map((r) => -r.charge_mw), marker: { color: tint(c, 0.45) } },
-    { type: "scatter", mode: "lines", name: "FIR cleared", x: tl, y: p.map((r) => r.fir_mw), line: { color: css("--s2"), width: 2 } },
-    { type: "scatter", mode: "lines", name: "SIR cleared", x: tl, y: p.map((r) => r.sir_mw), line: { color: css("--s3"), width: 2 } },
-  ], layout({ barmode: "relative", yaxis: { ...layout().yaxis, title: { text: "MW" } }, xaxis: { ...layout().xaxis, nticks: 12 } }), cfg);
-  Plotly.react("profPriceChart", [
-    { type: "scatter", mode: "lines", name: "Node price", x: tl, y: p.map((r) => r.price), line: { color: css("--s1"), width: 2 }, fill: "tozeroy", fillcolor: "rgba(42,120,214,0.08)" },
-  ], layout({ showlegend: false, yaxis: { ...layout().yaxis, tickprefix: "$", title: { text: "$/MWh" } }, xaxis: { ...layout().xaxis, nticks: 12 } }), cfg);
 }
 
 // ---------- Day view: 48 half-hours for one battery ----------
@@ -273,11 +258,7 @@ function initControls() {
   $("#bessChips").addEventListener("change", (e) => { e.target.checked ? state.sel.add(e.target.value) : state.sel.delete(e.target.value); render(); });
 
   $("#detailBess").innerHTML = D.bess.filter((b) => withData.has(b.id)).map((b) => `<option value="${b.id}">${b.name}</option>`).join("");
-  const months = [...new Set(D.profile.map((r) => r.month))].sort();
-  $("#profMonth").innerHTML = months.map((m) => `<option>${m}</option>`).join("");
-  $("#profMonth").value = months[months.length - 1];
   $("#detailBess").onchange = () => { detail(); dayView(); };
-  $("#profMonth").onchange = detail;
   $("#dayPick").min = first; $("#dayPick").max = last; $("#dayPick").value = last;
   const shiftDay = (n) => { const d = new Date($("#dayPick").value + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n);
     const v = d.toISOString().slice(0, 10); if (v >= first && v <= last) { $("#dayPick").value = v; dayView(); } };
@@ -301,8 +282,8 @@ function initControls() {
 
 (async () => {
   const get = (f) => fetch(`data/${f}?v=${Date.now()}`).then((r) => r.json());
-  [D.bess, D.daily, D.profile, D.disp, D.tight, D.meta] = await Promise.all(
-    ["bess.json", "daily.json", "profile.json", "displacement_daily.json", "tight_periods.json", "meta.json"].map(get));
+  [D.bess, D.daily, D.disp, D.tight, D.meta] = await Promise.all(
+    ["bess.json", "daily.json", "displacement_daily.json", "tight_periods.json", "meta.json"].map(get));
   if (!D.daily.length) { $("#coverage").textContent = "No data yet - the first nightly run hasn't completed."; return; }
   initControls(); render();
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);

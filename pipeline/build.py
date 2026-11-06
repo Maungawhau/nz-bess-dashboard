@@ -156,12 +156,6 @@ def publish(tp, disp, registry, settings, warnings):
     os.makedirs(OUT, exist_ok=True)
     daily = B.daily_rollup(tp, registry) if not tp.empty else pd.DataFrame()
 
-    # intraday profile: mean MW per trading period, per BESS per month (how the battery is run through the day)
-    prof = pd.DataFrame()
-    if not tp.empty:
-        x = tp.assign(month=pd.to_datetime(tp["date"]).dt.strftime("%Y-%m"))
-        prof = x.groupby(["bess", "month", "tp"])[["discharge_mw", "charge_mw", "fir_mw", "sir_mw", "price"]].mean().reset_index()
-
     dd = D.daily_rollup(disp) if not disp.empty else pd.DataFrame()
     top = pd.DataFrame()
     if not disp.empty:
@@ -195,7 +189,6 @@ def publish(tp, disp, registry, settings, warnings):
         "warnings": sorted(set(warnings))[-60:],
     }
     files = {"bess.json": reg, "daily.json": _jsonable(daily) if not daily.empty else [],
-             "profile.json": _jsonable(prof) if not prof.empty else [],
              "displacement_daily.json": _jsonable(dd) if not dd.empty else [],
              "tight_periods.json": _jsonable(top) if not top.empty else [], "meta.json": meta}
     for n, obj in files.items():

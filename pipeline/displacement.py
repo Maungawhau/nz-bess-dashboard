@@ -28,22 +28,22 @@ FUELS = ["gas", "coal/gas", "diesel", "hydro", "geothermal", "wind", "solar", "o
 
 def _fuel_label(fuel: str, tech: str = "") -> str:
     f = f"{fuel} {tech}".lower()
-    if "bat" in f or "ele" == fuel.lower():
+    if "bat" in f or fuel.lower() == "ele" or "electrical energy" in f:
         return "battery"
-    if "coal" in f:
-        return "coal/gas"
-    if "gas" in f or "ocgt" in f or "ccgt" in f or "thermal" in f:
-        return "gas"
-    if "diesel" in f or "oil" in f or "die" in f:
-        return "diesel"
+    if "geo" in f:                      # before gas: "geothermal" contains "thermal"
+        return "geothermal"
     if "hyd" in f:
         return "hydro"
-    if "geo" in f:
-        return "geothermal"
-    if "wind" in f or "win" in f:
+    if "wind" in f or "wnd" in f:
         return "wind"
     if "sol" in f:
         return "solar"
+    if "coal" in f or "col" in f.split():
+        return "coal/gas"
+    if "diesel" in f or "oil" in f or "die" in f.split():
+        return "diesel"
+    if "gas" in f or "ocgt" in f or "ccgt" in f or "thermal" in f:
+        return "gas"
     return "other"
 
 

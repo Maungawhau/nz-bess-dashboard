@@ -4,7 +4,7 @@ This dashboard shows how New Zealand's grid-scale batteries are dispatched and w
 
 - **Revenue** per battery and in total: energy arbitrage plus FIR and SIR reserves, viewable by day, week, month or year
 - **Volumes and prices**: MWh charged and discharged, average buy and sell prices, spread, cycles and round-trip efficiency
-- **How each battery is run**: its average daily dispatch profile by trading period
+- **How each battery is run**: a day view of all 48 half-hours (price, charge, discharge, reserves) with a hover breakdown
 - **What the batteries displace**: the plant (gas, Huntly coal/gas, hydro and so on) that would have cleared next in the island's offer stack, with a separate view of tight periods
 
 ## How it works

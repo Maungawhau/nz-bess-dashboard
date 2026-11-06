@@ -112,7 +112,6 @@ summary{cursor:pointer;color:var(--text-secondary)}
   <div class="section-title">Battery detail</div>
   <div class="filters" style="position:static;border:0;padding-top:0">
     <label class="f">Battery <select id="detailBess"></select></label>
-    <label class="f">Profile month <select id="profMonth"></select></label>
   </div>
   <div class="card" id="dayCard" style="position:relative">
     <div class="card-head">
@@ -131,8 +130,6 @@ summary{cursor:pointer;color:var(--text-secondary)}
   <div class="grid2">
     <div class="card"><h2>Charge &amp; discharge volume</h2><div class="muted">MWh per period; charging is shown below zero</div><div id="volChart" class="chart"></div></div>
     <div class="card"><h2>Captured prices</h2><div class="muted">Volume-weighted $/MWh at the battery node vs. the time-weighted node average</div><div id="priceChart" class="chart"></div></div>
-    <div class="card"><h2>Average day: dispatch by trading period</h2><div class="muted">Mean MW across the selected month: discharge (+), charge (−), FIR and SIR cleared</div><div id="profChart" class="chart"></div></div>
-    <div class="card"><h2>Average day: node price</h2><div class="muted">Mean $/MWh by trading period, same month</div><div id="profPriceChart" class="chart"></div></div>
   </div>
 
   <div class="section-title">What would have run instead? Indicative thermal displacement</div>
