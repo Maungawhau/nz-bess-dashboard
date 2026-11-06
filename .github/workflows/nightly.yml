@@ -39,10 +39,22 @@ jobs:
           if [ -n "${{ inputs.to }}" ]; then ARGS="$ARGS --to ${{ inputs.to }}"; fi
           python -m pipeline.build $ARGS
       - name: Commit updated data
+        # Outputs only: put this run's data on top of the latest main, so code pushed while the
+        # job was running can never conflict with the data commit.
         run: |
           git config user.name "bess-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add data/processed docs/data
-          git diff --cached --quiet || git commit -m "Data update $(date -u +%Y-%m-%d)"
-          git pull --rebase -X theirs origin main   # config/code may have changed while the job ran
-          git push
+          mkdir -p /tmp/out && cp -r data/processed /tmp/out/processed && cp -r docs/data /tmp/out/docsdata
+          for attempt in 1 2 3; do
+            git fetch -q origin main
+            git checkout -q -f -B main origin/main
+            rm -rf data/processed docs/data
+            mkdir -p data docs
+            cp -r /tmp/out/processed data/processed && cp -r /tmp/out/docsdata docs/data
+            git add -A data/processed docs/data
+            git diff --cached --quiet && { echo "no data changes"; exit 0; }
+            git commit -q -m "Data update $(date -u +%Y-%m-%d)"
+            git push -q origin main && exit 0
+            echo "push raced with another commit - retrying"; sleep 5
+          done
+          exit 1
