@@ -14,6 +14,7 @@
   --b1:#2a78d6; --b2:#eb6834; --b3:#1baf7a; --b4:#eda100; --b5:#e87ba4; --b6:#008300; --b7:#6250d6; --b8:#e34948;
   /* revenue streams - neutral, never a battery colour */
   --arb:#3a3936; --res:#a9a8a1; --fir:#55544f; --sir:#b9b8b1;
+  --ev-lrs:rgba(250,178,25,.22); --ev-hvdc:rgba(98,80,214,.14); --ev-sep:rgba(120,119,114,.16); --ev-trip:#d03b3b;
   --price:#3a3936; --neg:#d03b3b; --pos:#2a78d6; --mid:#f0efec; --accent:#0b0b0b;
 }
 @media (prefers-color-scheme:dark){
@@ -23,6 +24,7 @@
     --text-primary:#f0efec; --text-secondary:#c3c2b7; --text-muted:#8f8e86;
     --b1:#3987e5; --b2:#d95926; --b3:#199e70; --b4:#c98500; --b5:#d55181; --b6:#008300; --b7:#9085e9; --b8:#e66767;
     --arb:#e6e5e0; --res:#7d7c76; --fir:#d2d1ca; --sir:#7d7c76;
+    --ev-lrs:rgba(250,178,25,.22); --ev-hvdc:rgba(144,133,233,.20); --ev-sep:rgba(200,199,190,.14); --ev-trip:#e66767;
     --price:#e6e5e0; --neg:#e66767; --pos:#3987e5; --mid:#383835; --accent:#f0efec;
   }
 }
@@ -77,6 +79,13 @@ tbody tr.click{cursor:pointer} tbody tr.click:hover{background:var(--surface-0)}
 .tip hr{border:0;border-top:1px solid var(--grid);margin:6px 0}
 .tip .lbl{color:var(--text-muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin:2px 0 3px}
 .note{color:var(--text-secondary);font-size:13px;max-width:900px}
+.evlist{display:flex;flex-wrap:wrap;gap:6px 8px;margin:6px 0 2px}
+.ev{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;border:1px solid var(--border);border-radius:6px;padding:2px 8px;background:var(--surface-1);color:var(--text-primary);text-decoration:none}
+a.ev:hover{border-color:var(--text-muted)}
+.ev .k{width:10px;height:10px;border-radius:2px;flex:none}
+.tag{display:inline-block;font-size:11px;padding:0 5px;border-radius:4px;margin:0 3px 0 0;white-space:nowrap;color:var(--text-primary)}
+.tag.lrs{background:var(--ev-lrs)} .tag.hvdc{background:var(--ev-hvdc)} .tag.sep{background:var(--ev-sep)} .tag.event{border:1px solid var(--ev-trip);color:var(--ev-trip)}
+td.wrap{white-space:normal;text-align:left;min-width:150px}
 [hidden]{display:none!important}
 </style>
 </head>
@@ -135,9 +144,13 @@ tbody tr.click{cursor:pointer} tbody tr.click:hover{background:var(--surface-0)}
       <div id="hourChart" class="chart"></div>
     </div>
 
-    <div class="grid2">
-      <div class="card"><h2>Best 10 days for arbitrage</h2><div class="muted">Click a row to open that day</div><div class="tablewrap"><table id="topArb"></table></div></div>
-      <div class="card"><h2>Best 10 days for reserves</h2><div class="muted">Click a row to open that day</div><div class="tablewrap"><table id="topRes"></table></div></div>
+    <div class="card"><h2>Best 10 days for arbitrage</h2><div class="muted">Click a row to open that day. "What was happening" lists Transpower notices and island price separation that day; it shows what coincided, not what caused it.</div><div class="tablewrap"><table id="topArb"></table></div></div>
+    <div class="card"><h2>Best 10 days for reserves</h2><div class="muted">Click a row to open that day</div><div class="tablewrap"><table id="topRes"></table></div></div>
+
+    <div class="card">
+      <h2>Was the money made while the system was under stress?</h2>
+      <div class="muted">Revenue earned in half-hours tagged with a system event, from Transpower notices and island prices. A half-hour can carry more than one tag, so the columns overlap and don't add up to the total. These are coincidences, not proven causes: see "How it's calculated".</div>
+      <div class="tablewrap"><table id="evTable"></table></div>
     </div>
 
     <div class="card">
@@ -171,6 +184,7 @@ tbody tr.click{cursor:pointer} tbody tr.click:hover{background:var(--surface-0)}
         </div>
       </div>
       <div id="daySummary" class="daysum"></div>
+      <div id="dayEvents" class="evlist"></div>
       <div id="dayChart" style="width:100%;height:600px"></div>
       <div id="dayTip" class="tip" role="tooltip" hidden></div>
     </div>
@@ -193,6 +207,16 @@ tbody tr.click{cursor:pointer} tbody tr.click:hover{background:var(--surface-0)}
       <p><b>Data.</b> Each battery is two dispatch units at its connection point: an injection unit (discharge) and an offtake unit (charging). Discharge comes from cleared generation, charging from dispatched load, and reserves from FIR/SIR cleared on both units. Five-minute dispatch is averaged to half-hours. Prices are final (interim for the most recent days).</p>
       <p><b>Round-trip efficiency</b> is measured from dispatch, so it reads low for batteries that mostly sit on reserve. Their small top-up charging is dispatched, but energy delivered when reserves are triggered is not.</p>
       <p><b>Revenue per MW</b> is annualised: revenue ÷ battery MW × 365 ÷ active days in the period, counted from each battery's first day of activity (so commissioning gaps don't dilute it). Testing periods are included.</p>
+      <h2 style="margin-top:18px">System events: what they show and what they don't</h2>
+      <p>Half-hours are tagged with what was happening on the power system, so you can see whether high prices and battery revenue lined up with stress events:</p>
+      <ul>
+        <li><span class="tag lrs">Low residual</span> a Transpower <b>Low Residual Situation CAN</b> covered that half-hour, meaning the System Operator's schedules showed less than about 200 MW of spare generation after meeting demand and reserves. Week-ahead "potential" warnings are listed but not tagged, because they usually resolve.</li>
+        <li><span class="tag hvdc">HVDC</span> a CAN reported an HVDC pole outage or reduced capability, which limits transfer between the islands. Unplanned outages without a stated end time are assumed to last 6 hours.</li>
+        <li><span class="tag sep">Islands split</span> North and South Island prices (Ōtāhuhu vs Benmore) differed by at least $50/MWh and by at least 1.5×. This comes from EMI prices, not from a notice, and is usually a sign of an HVDC or transmission constraint.</li>
+        <li><span class="tag event">Trip / frequency</span> an Excursion Notice recorded a frequency excursion or a generation trip in that half-hour, which is when reserves are actually called on.</li>
+      </ul>
+      <p><b>Important: a tag shows that two things happened at the same time, not that one caused the other.</b> A Low Residual CAN is a warning based on forecast schedules. Most are resolved before real time, and prices can spike without one, or stay calm with one. Island separation can also come from losses or constraints elsewhere on the grid. The tags help you ask the right question about a price spike, but they don't answer it. For a definitive cause, look at the System Operator's event reports, or the Authority's under-frequency causer determinations, which are published months later.</p>
+      <p><b>How the notices are read:</b> every night the job reads Transpower's CAN and Excursion Notice pages, downloads new notices (PDFs) and extracts the affected times. When a notice is revised, only the latest version counts, and cancelled notices are ignored. Times are NZ local time. If Transpower changes its website layout, the job keeps the notices it already has and flags the problem in the data notes below.</p>
       <p><b>Not on the dashboard yet:</b> what the batteries push out of the merit order (gas displacement). A reliable answer needs a constraint-aware re-run of the market model, so it is parked as phase 2.</p>
       <details><summary>Data notes from the last run (<span id="nWarn">0</span>)</summary><ul id="warnList" class="muted"></ul></details>
     </div>

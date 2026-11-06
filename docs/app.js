@@ -62,6 +62,53 @@ const perMWyr = (rev, mwDays) => (mwDays ? (rev / mwDays) * 365 : NaN);
 const active = (r) => r.date >= (D.start[r.bess] || "9999");          // on or after the battery's first active day
 const shortName = (id) => bess(id).name.replace(/ BESS$/, "");
 
+// =============== SYSTEM EVENTS ===============
+const EVK = { lrs: ["Low residual", "--ev-lrs"], hvdc: ["HVDC", "--ev-hvdc"], sep: ["Islands split", "--ev-sep"], event: ["Trip / frequency", "--ev-trip"] };
+const evKind = (k) => (k === "lrs" ? "lrs" : k === "hvdc" ? "hvdc" : ["freq", "trip", "ufe"].includes(k) ? "event" : null);
+const hm = (iso) => iso.slice(11, 16);
+function eventsOn(day) {
+  const a = `${day}T00:00`, b = `${addDays(day, 1)}T00:00`;
+  return (D.ev?.events || []).filter((e) => e.start < b && e.end > a);
+}
+function dayTags(day, short = true) {
+  const out = [], seen = new Set();
+  for (const e of eventsOn(day)) {
+    const k = evKind(e.kind); if (!k || (e.kind === "ufe" && e.approx)) continue;
+    const t = k === "event" ? `${e.kind === "freq" ? "Freq." : "Trip"} ${hm(e.start)}` : k === "lrs" ? `Low residual ${hm(e.start)}–${hm(e.end)}${e.island ? " " + e.island : ""}` : "HVDC";
+    if (seen.has(t)) continue; seen.add(t);
+    out.push(`<span class="tag ${k}" title="${e.title.replace(/"/g, "")}">${t}</span>`);
+  }
+  const sp = D.ev?.days?.[day];
+  if (sp) out.push(`<span class="tag sep" title="NI–SI gap up to $${fmtN(Math.abs(sp.max_gap))}/MWh">Islands split ×${sp.sep_tps}</span>`);
+  return out.join("") || `<span class="muted">–</span>`;
+}
+function evList(days) {
+  const items = [];
+  for (const d of days) for (const e of eventsOn(d)) {
+    const k = evKind(e.kind); if (!k && e.kind !== "lrs_early") continue;
+    const key = e.ref + e.start; if (items.some((x) => x.key === key)) continue;
+    const when = e.start.slice(0, 10) === e.end.slice(0, 10) || k === "event"
+      ? `${days.length > 1 ? DOW[(new Date(e.start.slice(0, 10)).getUTCDay() + 6) % 7] + " " : ""}${hm(e.start)}${k === "event" ? "" : "–" + hm(e.end)}`
+      : `${prettyDate(e.start.slice(0, 10))} ${hm(e.start)} → ${prettyDate(e.end.slice(0, 10))} ${hm(e.end)}`;
+    const col = k ? css(EVK[k][1]) : "transparent";
+    items.push({ key, html: `<a class="ev" href="${e.url}" target="_blank" rel="noopener" title="Open the Transpower notice"><i class="k" style="background:${col};${k ? "" : "border:1px dashed var(--text-muted)"}"></i>${e.title}${e.island ? " (" + e.island + ")" : ""} · ${when}${e.approx ? " (approx.)" : ""}</a>` });
+  }
+  for (const d of days) { const sp = D.ev?.days?.[d]; if (sp) items.push({ key: "sep" + d, html: `<span class="ev"><i class="k" style="background:${css("--ev-sep")}"></i>Islands split: ${sp.sep_tps} half-hour${sp.sep_tps > 1 ? "s" : ""}${days.length > 1 ? " on " + DOW[(new Date(d).getUTCDay() + 6) % 7] : ""}, NI–SI gap up to $${fmtN(Math.abs(sp.max_gap))}/MWh</span>` }); }
+  $("#dayEvents").innerHTML = items.length ? `<span class="muted" style="align-self:center">What was going on:</span>` + items.map((x) => x.html).join("") : `<span class="muted">No Transpower notices or island price separation flagged.</span>`;
+}
+
+function evTable() {
+  const rows = (D.ev?.tagrev?.rows || []).filter((r) => r[0] >= S.from && r[0] <= S.to && S.sel.has(r[1]));
+  const H = ["Battery", "Total revenue", "During low residual CAN", "During HVDC outage", "While islands split", "In trip / frequency half-hours", "With no flagged event"];
+  const cell = (v, tot) => `${fmt$(v)}<span class="muted"> · ${tot > 0 ? fmtN((100 * v) / tot) : "–"}%</span>`;
+  $("#evTable").innerHTML = `<thead><tr>${H.map((h, i) => `<th class="${i ? "" : "l"}">${h}</th>`).join("")}</tr></thead><tbody>` + sel().map((b) => {
+    const t = { lrs: 0, hvdc: 0, sep: 0, event: 0, none: 0 };
+    rows.filter((r) => r[1] === b.id).forEach((r) => (t[r[2]] += r[3] + r[4]));
+    const tot = sum(D.daily.filter((r) => r.bess === b.id && inRange(r))).total_rev;
+    return `<tr><td>${swatch(b.id)} ${b.name}</td><td><b>${fmt$(tot)}</b></td><td>${cell(t.lrs, tot)}</td><td>${cell(t.hvdc, tot)}</td><td>${cell(t.sep, tot)}</td><td>${cell(t.event, tot)}</td><td>${cell(t.none, tot)}</td></tr>`;
+  }).join("") + "</tbody>";
+}
+
 // =============== OVERVIEW ===============
 function overview() {
   const rows = D.daily.filter((r) => S.sel.has(r.bess) && inRange(r));
@@ -75,7 +122,7 @@ function overview() {
     ["Energy discharged", fmtMWh(t.discharge_mwh), `sold at $${fmtN(t.sell)}/MWh on average`],
   ];
   $("#tiles").innerHTML = tiles.map(([k, v, d]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join("");
-  cumChart(rows); perChart(rows); calChart(rows); hourChart(); topTables(rows); cmpTable(rows);
+  cumChart(rows); perChart(rows); calChart(rows); hourChart(); topTables(rows); evTable(); cmpTable(rows);
 }
 
 function cumChart(rows) {
@@ -140,14 +187,14 @@ function hourChart() {
 
 function topTables(rows) {
   const arb = rows.slice().sort((a, b) => b.arbitrage_rev - a.arbitrage_rev).slice(0, 10);
-  $("#topArb").innerHTML = `<thead><tr><th>Date</th><th class="l">Battery</th><th>Arbitrage</th><th>Sold</th><th>Sell / buy $</th><th>Peak $</th></tr></thead><tbody>` +
+  $("#topArb").innerHTML = `<thead><tr><th>Date</th><th class="l">Battery</th><th>Arbitrage</th><th>Sold</th><th>Sell / buy $</th><th>Peak $</th><th class="l">What was happening</th></tr></thead><tbody>` +
     arb.map((r) => `<tr class="click" data-b="${r.bess}" data-d="${r.date}"><td>${shortDate(r.date)}</td><td class="l">${swatch(r.bess)} ${shortName(r.bess)}</td>
       <td><b>${fmt$(r.arbitrage_rev)}</b></td><td>${fmtN(r.discharge_mwh)} MWh</td><td>${fmtN(r.discharge_mwh ? r.discharge_rev / r.discharge_mwh : NaN)} / ${fmtN(r.charge_mwh ? r.charge_cost / r.charge_mwh : NaN)}</td>
-      <td>${fmtN(r.node_price_max)}</td></tr>`).join("") + "</tbody>";
+      <td>${fmtN(r.node_price_max)}</td><td class="wrap">${dayTags(r.date)}</td></tr>`).join("") + "</tbody>";
   const res = rows.slice().sort((a, b) => b.reserve_rev - a.reserve_rev).slice(0, 10);
-  $("#topRes").innerHTML = `<thead><tr><th>Date</th><th class="l">Battery</th><th>Reserves</th><th>FIR</th><th>SIR</th><th>Avg MW held</th></tr></thead><tbody>` +
+  $("#topRes").innerHTML = `<thead><tr><th>Date</th><th class="l">Battery</th><th>Reserves</th><th>FIR</th><th>SIR</th><th>Avg MW held</th><th class="l">What was happening</th></tr></thead><tbody>` +
     res.map((r) => `<tr class="click" data-b="${r.bess}" data-d="${r.date}"><td>${shortDate(r.date)}</td><td class="l">${swatch(r.bess)} ${shortName(r.bess)}</td>
-      <td><b>${fmt$(r.reserve_rev)}</b></td><td>${fmt$(r.fir_rev)}</td><td>${fmt$(r.sir_rev)}</td><td>${fmtN((r.fir_mwh + r.sir_mwh) / 24)}</td></tr>`).join("") + "</tbody>";
+      <td><b>${fmt$(r.reserve_rev)}</b></td><td>${fmt$(r.fir_rev)}</td><td>${fmt$(r.sir_rev)}</td><td>${fmtN((r.fir_mwh + r.sir_mwh) / 24)}</td><td class="wrap">${dayTags(r.date)}</td></tr>`).join("") + "</tbody>";
 }
 
 function cmpTable(rows) {
@@ -211,7 +258,13 @@ function placeTip(ev) {
   if (top + tip.offsetHeight > card.height - 8) top = Math.max(8, card.height - tip.offsetHeight - 8);
   tip.style.left = `${left}px`; tip.style.top = `${top}px`;
 }
-function threePanel(x, price, dis, chg, fir, sir, c, units, isDay) {
+const mktCache = {};
+function mktMonth(m) {
+  if (!mktCache[m]) mktCache[m] = fetch(`data/market/${m}.json?v=${D.meta.generated_utc}`).then((r) => (r.ok ? r.json() : { cols: [], rows: [] }))
+    .then((j) => j.rows.map((r) => Object.fromEntries(j.cols.map((c, i) => [c, r[i]]))));
+  return mktCache[m];
+}
+function threePanel(x, price, dis, chg, fir, sir, c, units, isDay, extra = {}) {
   const ln = (shape) => (isDay ? { shape: "hv" } : {});
   const traces = [
     { type: "scatter", mode: isDay ? "lines" : "lines+markers", name: isDay ? "Node price" : "Node price (daily avg)", x, y: price, line: { color: css("--price"), width: 2, ...ln() }, marker: { size: 7 }, yaxis: "y3" },
@@ -219,7 +272,7 @@ function threePanel(x, price, dis, chg, fir, sir, c, units, isDay) {
     { type: "bar", name: "Charge (bought)", x, y: chg.map((v) => (v == null ? null : -v)), marker: { color: tint(c, 0.4) }, yaxis: "y2" },
     { type: "scatter", mode: isDay ? "lines" : "lines+markers", name: "FIR held", x, y: fir, line: { color: css("--fir"), width: 2, ...ln() }, marker: { size: 7 }, yaxis: "y" },
     { type: "scatter", mode: isDay ? "lines" : "lines+markers", name: "SIR held", x, y: sir, line: { color: css("--sir"), width: 2, dash: "dot", ...ln() }, marker: { size: 7 }, yaxis: "y" },
-  ].map((t) => ({ ...t, hoverinfo: "none" }));
+  ].concat(extra.traces || []).map((t) => ({ ...t, hoverinfo: "none" }));
   const ay = layout().yaxis, sp = { showspikes: true, spikemode: "across", spikethickness: 1, spikedash: "solid", spikecolor: css("--text-muted") };
   Plotly.react("dayChart", traces, layout({
     barmode: "relative", hovermode: "x", bargap: isDay ? 0.15 : 0.35, legend: { orientation: "h", y: -0.07, x: 0 }, margin: { l: 72, r: 16, t: 18, b: 36 },
@@ -227,6 +280,7 @@ function threePanel(x, price, dis, chg, fir, sir, c, units, isDay) {
     yaxis3: { ...ay, domain: [0.72, 1], tickprefix: "$", rangemode: "tozero", title: { text: "price $/MWh" } },
     yaxis2: { ...ay, domain: [0.30, 0.66], title: { text: `energy ${units}` } },
     yaxis: { ...ay, domain: [0, 0.24], rangemode: "tozero", title: { text: `reserve ${units}` } },
+    shapes: extra.shapes || [],
     annotations: [["Price", 1], ["Energy: sold above zero, bought below", 0.66], ["Reserves held (paid to stand by)", 0.24]].map(([t, y]) => ({
       text: t, xref: "paper", yref: "paper", x: 0, y, xanchor: "left", yanchor: "bottom", showarrow: false, font: { size: 11, color: css("--text-muted") } })),
   }), cfg);
@@ -240,19 +294,35 @@ async function dayView() {
   $("#daySub").textContent = "Midnight to midnight. Hover any half-hour for its breakdown and the day's totals.";
   const rows = (await tpMonth(day.slice(0, 7))).filter((r) => r.bess === b.id && r.date === day).sort((a, x) => a.tp - x.tp);
   const tip = $("#dayTip"); tip.hidden = true;
-  if (!rows.length) { $("#daySummary").innerHTML = `<span>No data for ${b.name} on ${prettyDate(day)}.</span>`; Plotly.purge("dayChart"); return; }
+  if (!rows.length) { $("#daySummary").innerHTML = `<span>No data for ${b.name} on ${prettyDate(day)}.</span>`; $("#dayEvents").innerHTML = ""; Plotly.purge("dayChart"); return; }
   const dr = D.daily.find((r) => r.bess === b.id && r.date === day), T = sum(dr ? [dr] : []);
   $("#daySummary").innerHTML = [["Day total", fmt$(T.total_rev)], ["Arbitrage", fmt$(T.arbitrage_rev)], ["Reserves", fmt$(T.reserve_rev)],
     ["Sold", `${fmtN(T.discharge_mwh)} MWh @ $${fmtN(T.sell)}`], ["Bought", `${fmtN(T.charge_mwh)} MWh @ $${fmtN(T.buy)}`]].map(([k, v]) => `<span>${k} <b>${v}</b></span>`).join("");
   const c = colorOf(b.id), x = rows.map((r) => tpTime(r.tp)), g = (f) => rows.map((r) => r[f]);
-  threePanel(x, g("price"), g("discharge_mw"), g("charge_mw"), g("fir_mw"), g("sir_mw"), c, "MW", true);
+  // island prices + event shading
+  const mk = Object.fromEntries((await mktMonth(day.slice(0, 7))).filter((m) => m.date === day).map((m) => [m.tp, m]));
+  const ps = D.meta.price_separation || { min_gap: 50, min_ratio: 1.5 };
+  const shapes = [], band = (i0, i1, col) => shapes.push({ type: "rect", xref: "x", yref: "paper", x0: i0 - 0.5, x1: i1 - 0.5, y0: 0, y1: 1, fillcolor: col, line: { width: 0 }, layer: "below" });
+  rows.forEach((r, i) => { const m = mk[r.tp]; if (!m) return; const hi = Math.max(m.ni_price, m.si_price), lo = Math.max(1, Math.min(m.ni_price, m.si_price));
+    if (Math.abs(m.ni_price - m.si_price) >= ps.min_gap && hi / lo >= ps.min_ratio) band(i, i + 1, css("--ev-sep")); });
+  const d0 = new Date(`${day}T00:00:00Z`).getTime(), idx = (iso) => Math.max(0, Math.min(rows.length, (new Date(iso.slice(0, 16) + ":00Z").getTime() - d0) / 18e5));
+  for (const e of eventsOn(day)) {
+    const k = evKind(e.kind); if (!k || (e.kind === "ufe" && e.approx)) continue;
+    if (k === "event") { const i = idx(e.start) - 0.5; shapes.push({ type: "line", xref: "x", yref: "paper", x0: i, x1: i, y0: 0, y1: 1, line: { color: css("--ev-trip"), width: 1.5, dash: "dot" } }); }
+    else band(Math.floor(idx(e.start)), Math.ceil(idx(e.end)), css(EVK[k][1]));
+  }
+  const siTrace = Object.keys(mk).length ? [{ type: "scatter", mode: "lines", name: "South Island price (Benmore)", x, y: rows.map((r) => mk[r.tp]?.si_price ?? null), line: { color: css("--text-muted"), width: 1.5, dash: "dash", shape: "hv" }, yaxis: "y3" }] : [];
+  threePanel(x, g("price"), g("discharge_mw"), g("charge_mw"), g("fir_mw"), g("sir_mw"), c, "MW", true, { traces: siTrace, shapes });
+  evList([day]);
   const el = document.getElementById("dayChart");
   el.removeAllListeners?.("plotly_hover"); el.removeAllListeners?.("plotly_unhover");
   el.on("plotly_hover", (ev) => {
     const r = rows[ev.points[0].pointIndex];
     const il = r.fir_il_mw || r.sir_il_mw ? tipLine("", "&nbsp;&nbsp;of which while charging", `${fmtN(r.fir_il_mw, 1)} / ${fmtN(r.sir_il_mw, 1)} MW`) : "";
+    const m = mk[r.tp];
     tip.innerHTML = `<h4>${tpTime(r.tp)}–${tpTime(r.tp + 1)} <span class="muted">· ${prettyDate(day)}</span></h4><div class="lbl">This half-hour</div>
       ${tipLine(css("--price"), "Node price", `$${fmtN(r.price, 2)}/MWh`)}
+      ${m ? tipLine(css("--text-muted"), "South Island price", `$${fmtN(m.si_price, 2)}/MWh`) : ""}
       ${tipLine(c, "Sold (discharge)", `${fmtN(r.discharge_mw, 1)} MW · ${fmtN(r.discharge_mw / 2, 1)} MWh`)}
       ${tipLine(tint(c, 0.4), "Bought (charge)", `${fmtN(r.charge_mw, 1)} MW · ${fmtN(r.charge_mw / 2, 1)} MWh`)}
       ${tipLine(css("--fir"), "FIR held", `${fmtN(r.fir_mw, 1)} MW @ $${fmtN(r.fir_price, 2)}`)}
@@ -278,7 +348,11 @@ function weekView() {
   $("#daySummary").innerHTML = [["Week total", fmt$(W.total_rev)], ["Arbitrage", fmt$(W.arbitrage_rev)], ["Reserves", fmt$(W.reserve_rev)],
     ["Sold", `${fmtN(W.discharge_mwh)} MWh @ $${fmtN(W.sell)}`], ["Bought", `${fmtN(W.charge_mwh)} MWh @ $${fmtN(W.buy)}`]].map(([k, v]) => `<span>${k} <b>${v}</b></span>`).join("");
   const c = colorOf(b.id), x = days.map((d, i) => `${DOW[i]} ${+d.slice(8)} ${MON[+d.slice(5, 7) - 1]}`), g = (f) => rows.map((r) => (r ? r[f] : null));
-  threePanel(x, g("node_price_avg"), g("discharge_mwh"), g("charge_mwh"), g("fir_mwh"), g("sir_mwh"), c, "MWh", false);
+  const wshapes = [];
+  days.forEach((d, i) => { const ks = new Set(eventsOn(d).map((e) => evKind(e.kind)).filter((k) => k === "lrs" || k === "hvdc"));
+    [...ks].forEach((k) => wshapes.push({ type: "rect", xref: "x", yref: "paper", x0: i - 0.5, x1: i + 0.5, y0: 0.72, y1: 1, fillcolor: css(EVK[k][1]), line: { width: 0 }, layer: "below" })); });
+  threePanel(x, g("node_price_avg"), g("discharge_mwh"), g("charge_mwh"), g("fir_mwh"), g("sir_mwh"), c, "MWh", false, { shapes: wshapes });
+  evList(days);
   const el = document.getElementById("dayChart");
   el.removeAllListeners?.("plotly_hover"); el.removeAllListeners?.("plotly_unhover"); el.removeAllListeners?.("plotly_click");
   el.on("plotly_hover", (ev) => {
@@ -366,6 +440,7 @@ function init() {
 (async () => {
   const get = (f) => fetch(`data/${f}?v=${Date.now()}`).then((r) => r.json());
   [D.bess, D.daily, D.hourly, D.meta] = await Promise.all(["bess.json", "daily.json", "hourly.json", "meta.json"].map(get));
+  D.ev = await get("events.json").catch(() => ({ events: [], days: {}, tagrev: { rows: [] } }));
   if (!D.daily.length) { $("#coverage").textContent = "No data yet: the first nightly run hasn't completed."; return; }
   init(); setTab("overview");
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => setTab(S.tab));

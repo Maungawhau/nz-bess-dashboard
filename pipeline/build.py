@@ -18,6 +18,7 @@ import yaml
 from . import bess as B
 from . import displacement as D
 from . import emi
+from . import events as E
 
 PROC = "data/processed"
 OUT = "docs/data"
@@ -100,7 +101,7 @@ def run(start=None, end=None, skip_displacement=False, publish_only=False):
     settings, registry = load_config()
     skip_displacement = skip_displacement or not settings.get("run_displacement", False)
     if publish_only:   # rebuild dashboard files from the saved half-hourly history, no downloads
-        publish(_read_parts("tp"), pd.DataFrame(), registry, settings, [])
+        publish(_read_parts("tp"), pd.DataFrame(), registry, settings, [], _read_parts("market"), _events(settings, [], refresh=False))
         return
     warnings: list[str] = []
     fleet = load_fleet()
@@ -113,7 +114,9 @@ def run(start=None, end=None, skip_displacement=False, publish_only=False):
     days = dates_to_run(settings, done, start, end)
     print(f"processing {len(days)} day(s): {days[:1]} .. {days[-1:]}")
 
-    new_tp, new_disp, done_days = [], [], []
+    market = _read_parts("market")
+    have_mkt = set(market["date"]) if not market.empty else set()
+    new_tp, new_disp, done_days, new_mkt = [], [], [], []
     for d in days:
         try:
             co = B.cleared_long(d)
@@ -123,6 +126,7 @@ def run(start=None, end=None, skip_displacement=False, publish_only=False):
                 continue
             new_tp.append(t)
             done_days.append(d)
+            new_mkt.append(E.market_day(B.energy_prices(d), B.reserve_prices(d), d, settings))
             if not skip_displacement:
                 x = D.compute_day(d, co, t, registry, fmap, settings)
                 if not x.empty:
@@ -134,6 +138,25 @@ def run(start=None, end=None, skip_displacement=False, publish_only=False):
         finally:
             emi.clear_cache()
 
+    # island prices for days in the history that don't have them yet (price files only - fast)
+    hist_days = sorted(set(tp_all["date"]) if not tp_all.empty else set())
+    todo = [d for d in hist_days if d not in have_mkt and d not in done_days]
+    if todo:
+        print(f"back-filling island prices for {len(todo)} day(s)")
+    for d in todo:
+        try:
+            new_mkt.append(E.market_day(B.energy_prices(d), B.reserve_prices(d), d, settings))
+        except Exception as e:
+            warnings.append(f"{d}: island prices: {e}")
+        finally:
+            emi.clear_cache()
+    new_mkt = [m for m in new_mkt if not m.empty]
+    if new_mkt:
+        nm = pd.concat(new_mkt, ignore_index=True)
+        nm["date"] = pd.to_datetime(nm["date"]).dt.date
+        market = pd.concat([market[~market["date"].isin(set(nm["date"]))] if not market.empty else market, nm], ignore_index=True)
+        _write_parts("market", market[market["date"].isin(set(nm["date"]))])
+
     if new_tp:
         nt = pd.concat(new_tp, ignore_index=True)
         tp_all = pd.concat([tp_all[~tp_all["date"].isin(done_days)] if not tp_all.empty else tp_all, nt], ignore_index=True)
@@ -143,7 +166,12 @@ def run(start=None, end=None, skip_displacement=False, publish_only=False):
         disp_all = pd.concat([disp_all[~disp_all["date"].isin(done_days)] if not disp_all.empty else disp_all, nd], ignore_index=True)
         _write_parts("displacement", disp_all[disp_all["date"].isin(done_days)])
 
-    publish(tp_all, disp_all, registry, settings, warnings)
+    publish(tp_all, disp_all, registry, settings, warnings, market, _events(settings, warnings, refresh=True))
+
+
+def _events(settings, warnings, refresh=True):
+    store = E.update_notices(warnings) if refresh else (pd.read_csv(E.STORE, dtype=str).fillna("") if os.path.exists(E.STORE) else pd.DataFrame())
+    return E.active_events(store, pd.Timestamp(settings["start_date"]).date())
 
 
 def _jsonable(df):
@@ -156,7 +184,9 @@ def _jsonable(df):
     return json.loads(df.to_json(orient="records"))
 
 
-def publish(tp, disp, registry, settings, warnings):
+def publish(tp, disp, registry, settings, warnings, market=None, events=None):
+    market = market if market is not None else pd.DataFrame()
+    events = events or []
     os.makedirs(OUT, exist_ok=True)
     daily = B.daily_rollup(tp, registry) if not tp.empty else pd.DataFrame()
 
@@ -187,6 +217,42 @@ def publish(tp, disp, registry, settings, warnings):
                 json.dump({"cols": cols, "rows": g.values.tolist()}, f, separators=(",", ":"), default=str)
             months.append(m)
 
+    # ---- system events: notices, island prices, and revenue earned during tagged half-hours ----
+    ev_out = {"events": events, "days": {}, "tagrev": {"cols": ["date", "bess", "tag", "arb", "res"], "rows": []}}
+    if not tp.empty:
+        tags = E.tag_frame(tp[["date", "tp"]], events, market, settings)
+        x = tp.assign(date=tp["date"].astype(str), res=tp["fir_rev"] + tp["sir_rev"]).merge(tags, on=["date", "tp"], how="left")
+        for c in ("lrs", "hvdc", "event", "sep"):
+            x[c] = x[c].fillna(False).astype(bool)
+        x["none"] = ~(x["lrs"] | x["hvdc"] | x["event"] | x["sep"])
+        rows = []
+        for tag in ("lrs", "hvdc", "event", "sep", "none"):
+            g = x[x[tag]].groupby(["date", "bess"])[["arbitrage_rev", "res"]].sum().round(0).reset_index()
+            rows += [[r.date, r.bess, tag, r.arbitrage_rev, r.res] for r in g.itertuples()]
+        ev_out["tagrev"]["rows"] = rows
+        # per-day summary of island separation
+        if not market.empty:
+            m = market.assign(date=market["date"].astype(str))
+            m = m.merge(tags[["date", "tp", "sep"]], on=["date", "tp"], how="left")
+            m["gap"] = (m["ni_price"] - m["si_price"])
+            for d, g in m.groupby("date"):
+                sg = g[g["sep"].fillna(False).astype(bool)]
+                if len(sg):
+                    i = sg["gap"].abs().idxmax()
+                    ev_out["days"][d] = {"sep_tps": int(len(sg)), "max_gap": round(float(sg.loc[i, "gap"]), 0),
+                                         "first": int(sg["tp"].min()), "last": int(sg["tp"].max())}
+        # island prices for the day view, one file per month
+        if not market.empty:
+            os.makedirs(f"{OUT}/market", exist_ok=True)
+            mm = market.assign(date=market["date"].astype(str)).sort_values(["date", "tp"])
+            cols = [c for c in ["date", "tp", "ni_price", "si_price", "ni_fir_price", "ni_sir_price", "si_fir_price", "si_sir_price"] if c in mm]
+            for mon, g in mm.groupby(mm["date"].str[:7]):
+                g = g[cols].copy()
+                for c in cols[2:]:
+                    g[c] = g[c].astype(float).round(2)
+                with open(f"{OUT}/market/{mon}.json", "w") as f:
+                    json.dump({"cols": cols, "rows": g.fillna(0).values.tolist()}, f, separators=(",", ":"), default=str)
+
     reg = [{k: (str(v) if k == "commissioned" else v) for k, v in b.items()} for b in registry]
     meta = {
         "generated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ"),
@@ -194,10 +260,11 @@ def publish(tp, disp, registry, settings, warnings):
         "last_date": str(tp["date"].max()) if not tp.empty else None,
         "settings": {k: settings[k] for k in ("tight_market", "reference_nodes")},
         "tp_months": sorted(months),
+        "price_separation": settings.get("price_separation", {"min_gap": 50, "min_ratio": 1.5}),
         "warnings": sorted(set(warnings))[-60:],
     }
     files = {"bess.json": reg, "daily.json": _jsonable(daily) if not daily.empty else [],
-             "hourly.json": tod, "meta.json": meta}
+             "hourly.json": tod, "events.json": ev_out, "meta.json": meta}
     for n, obj in files.items():
         with open(f"{OUT}/{n}", "w") as f:
             json.dump(obj, f, separators=(",", ":"), default=str)

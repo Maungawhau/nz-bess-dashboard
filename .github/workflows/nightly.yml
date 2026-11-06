@@ -49,14 +49,14 @@ jobs:
         run: |
           git config user.name "bess-bot"
           git config user.email "actions@users.noreply.github.com"
-          mkdir -p /tmp/out && cp -r data/processed /tmp/out/processed && cp -r docs/data /tmp/out/docsdata
+          mkdir -p /tmp/out data/events && cp -r data/processed /tmp/out/processed && cp -r data/events /tmp/out/events && cp -r docs/data /tmp/out/docsdata
           for attempt in 1 2 3; do
             git fetch -q origin main
             git checkout -q -f -B main origin/main
-            rm -rf data/processed docs/data
+            rm -rf data/processed data/events docs/data
             mkdir -p data docs
-            cp -r /tmp/out/processed data/processed && cp -r /tmp/out/docsdata docs/data
-            git add -A data/processed docs/data
+            cp -r /tmp/out/processed data/processed && cp -r /tmp/out/events data/events && cp -r /tmp/out/docsdata docs/data
+            git add -A data/processed data/events docs/data
             git diff --cached --quiet && { echo "no data changes"; exit 0; }
             git commit -q -m "Data update $(date -u +%Y-%m-%d)"
             git push -q origin main && exit 0
