@@ -5,7 +5,13 @@ const SLOTS = ["--s1", "--s2", "--s3", "--s4", "--s5", "--s6", "--s7", "--s8"];
 const state = { gran: "month", split: "bess", tight: "all", sel: new Set(), from: null, to: null };
 let D = {};
 
-const fmt$ = (v) => (Math.abs(v) >= 1e6 ? `$${(v / 1e6).toFixed(2)}m` : Math.abs(v) >= 1e3 ? `$${(v / 1e3).toFixed(0)}k` : `$${v.toFixed(0)}`);
+const fmt$ = (v) => {
+  if (v == null || !isFinite(v)) return "–";
+  const a = Math.abs(v), s = v < 0 ? "−" : "";
+  return s + (a >= 1e6 ? `$${(a / 1e6).toFixed(2)}m` : a >= 1e4 ? `$${(a / 1e3).toFixed(0)}k` : `$${a.toLocaleString("en-NZ", { maximumFractionDigits: 0 })}`);
+};
+const tint = (hex, a) => { const h = hex.replace("#", ""); const n = parseInt(h.length === 3 ? h.replace(/./g, "$&$&") : h, 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`; };
 const fmtN = (v, d = 0) => (v == null || !isFinite(v) ? "–" : v.toLocaleString("en-NZ", { maximumFractionDigits: d, minimumFractionDigits: d }));
 const fmtMWh = (v) => (Math.abs(v) >= 1000 ? `${fmtN(v / 1000, 1)} GWh` : `${fmtN(v)} MWh`);
 
@@ -122,7 +128,7 @@ function detail() {
   const x = keys.map(periodLabel), c = colorOf(id);
   Plotly.react("volChart", [
     { type: "bar", name: "Discharge", x, y: keys.map((k) => m.get(k).discharge_mwh), marker: { color: c }, hovertemplate: "%{y:,.0f} MWh<extra>Discharge</extra>" },
-    { type: "bar", name: "Charge", x, y: keys.map((k) => -m.get(k).charge_mwh), marker: { color: c, opacity: 0.45 }, hovertemplate: "%{y:,.0f} MWh<extra>Charge</extra>" },
+    { type: "bar", name: "Charge", x, y: keys.map((k) => -m.get(k).charge_mwh), marker: { color: tint(c, 0.45) }, hovertemplate: "%{y:,.0f} MWh<extra>Charge</extra>" },
   ], layout({ barmode: "relative", xaxis: pAxis(), yaxis: { ...layout().yaxis, title: { text: "MWh" } } }), cfg);
   const pr = (k, a, b2) => (m.get(k)[b2] ? m.get(k)[a] / m.get(k)[b2] : null);
   Plotly.react("priceChart", [
@@ -138,13 +144,91 @@ function detail() {
   const tl = tpx.map(tpLabel);
   Plotly.react("profChart", [
     { type: "bar", name: "Discharge", x: tl, y: p.map((r) => r.discharge_mw), marker: { color: c } },
-    { type: "bar", name: "Charge", x: tl, y: p.map((r) => -r.charge_mw), marker: { color: c, opacity: 0.45 } },
+    { type: "bar", name: "Charge", x: tl, y: p.map((r) => -r.charge_mw), marker: { color: tint(c, 0.45) } },
     { type: "scatter", mode: "lines", name: "FIR cleared", x: tl, y: p.map((r) => r.fir_mw), line: { color: css("--s2"), width: 2 } },
     { type: "scatter", mode: "lines", name: "SIR cleared", x: tl, y: p.map((r) => r.sir_mw), line: { color: css("--s3"), width: 2 } },
   ], layout({ barmode: "relative", yaxis: { ...layout().yaxis, title: { text: "MW" } }, xaxis: { ...layout().xaxis, nticks: 12 } }), cfg);
   Plotly.react("profPriceChart", [
     { type: "scatter", mode: "lines", name: "Node price", x: tl, y: p.map((r) => r.price), line: { color: css("--s1"), width: 2 }, fill: "tozeroy", fillcolor: "rgba(42,120,214,0.08)" },
   ], layout({ showlegend: false, yaxis: { ...layout().yaxis, tickprefix: "$", title: { text: "$/MWh" } }, xaxis: { ...layout().xaxis, nticks: 12 } }), cfg);
+}
+
+// ---------- Day view: 48 half-hours for one battery ----------
+const tpCache = {};
+async function tpMonth(m) {
+  if (!tpCache[m]) {
+    tpCache[m] = fetch(`data/tp/${m}.json?v=${D.meta.generated_utc}`).then((r) => (r.ok ? r.json() : { cols: [], rows: [] }))
+      .then((j) => j.rows.map((r) => Object.fromEntries(j.cols.map((c, i) => [c, r[i]]))));
+  }
+  return tpCache[m];
+}
+const tpTime = (tp) => { const m = (tp - 1) * 30; return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`; };
+
+async function dayView() {
+  const id = $("#detailBess").value, day = $("#dayPick").value;
+  if (!id || !day) return;
+  const rows = (await tpMonth(day.slice(0, 7))).filter((r) => r.bess === id && r.date === day).sort((a, b) => a.tp - b.tp);
+  const b = D.bess.find((x) => x.id === id), c = colorOf(id);
+  if (!rows.length) {
+    $("#daySummary").innerHTML = `<span>No half-hourly data for ${b.name} on ${day}.</span>`;
+    Plotly.purge("dayChart"); return;
+  }
+  const sum = (f) => rows.reduce((a, r) => a + (r[f] || 0), 0);
+  const T = { dis: sum("discharge_mw") / 2, chg: sum("charge_mw") / 2, arb: sum("arbitrage_rev"), fir: sum("fir_rev"), sir: sum("sir_rev"),
+    firMwh: sum("fir_mw") / 2, sirMwh: sum("sir_mw") / 2 };
+  T.res = T.fir + T.sir; T.tot = T.arb + T.res;
+  T.sell = T.dis ? rows.reduce((a, r) => a + r.discharge_mw * r.price, 0) / 2 / T.dis : NaN;
+  T.buy = T.chg ? rows.reduce((a, r) => a + r.charge_mw * r.price, 0) / 2 / T.chg : NaN;
+  $("#daySummary").innerHTML = [
+    ["Total", fmt$(T.tot)], ["Arbitrage", fmt$(T.arb)], ["Reserves", fmt$(T.res)],
+    ["Discharged", `${fmtN(T.dis)} MWh @ $${fmtN(T.sell)}`], ["Charged", `${fmtN(T.chg)} MWh @ $${fmtN(T.buy)}`],
+  ].map(([k, v]) => `<span>${k} <b>${v}</b></span>`).join("");
+
+  const x = rows.map((r) => tpTime(r.tp)), ax = layout().xaxis, ay = layout().yaxis;
+  const traces = [
+    { type: "scatter", mode: "lines", name: "Node price", x, y: rows.map((r) => r.price), line: { color: css("--text-secondary"), width: 2, shape: "hv" }, yaxis: "y2" },
+    { type: "bar", name: "Discharge", x, y: rows.map((r) => r.discharge_mw), marker: { color: c } },
+    { type: "bar", name: "Charge", x, y: rows.map((r) => -r.charge_mw), marker: { color: tint(c, 0.45) } },
+    { type: "scatter", mode: "lines", name: "FIR held", x, y: rows.map((r) => r.fir_mw), line: { color: css("--s2"), width: 2, shape: "hv" } },
+    { type: "scatter", mode: "lines", name: "SIR held", x, y: rows.map((r) => r.sir_mw), line: { color: css("--s3"), width: 2, shape: "hv", dash: "dot" } },
+  ].map((t) => ({ ...t, hoverinfo: "none" }));
+  Plotly.react("dayChart", traces, layout({
+    barmode: "relative", hovermode: "x", showlegend: true, margin: { l: 64, r: 16, t: 10, b: 40 },
+    legend: { orientation: "h", y: -0.1, x: 0 },
+    xaxis: { ...ax, type: "category", tickangle: 0, nticks: 13, showspikes: true, spikemode: "across", spikethickness: 1, spikedash: "solid", spikecolor: css("--neutral") },
+    yaxis: { ...ay, domain: [0, 0.62], title: { text: "MW" } },
+    yaxis2: { ...ay, domain: [0.7, 1], title: { text: "$/MWh" }, tickprefix: "$", rangemode: "tozero" },
+  }), cfg);
+
+  const el = document.getElementById("dayChart"), tip = $("#dayTip");
+  el.removeAllListeners?.("plotly_hover"); el.removeAllListeners?.("plotly_unhover");
+  el.on("plotly_hover", (ev) => {
+    const i = ev.points[0].pointIndex, r = rows[i];
+    const line = (sw, k, v) => `<div class="row"><span>${sw ? `<i class="sw" style="background:${sw}"></i>` : ""}${k}</span><span>${v}</span></div>`;
+    const il = (r.fir_il_mw || r.sir_il_mw) ? line("", "&nbsp;&nbsp;of which interruptible load", `${fmtN(r.fir_il_mw, 1)} / ${fmtN(r.sir_il_mw, 1)} MW`) : "";
+    tip.innerHTML = `<h4>${day} · ${tpTime(r.tp)}–${tpTime(r.tp + 1)} <span class="muted">TP ${r.tp}</span></h4>
+      <div class="lbl">This half-hour</div>
+      ${line(c, "Discharge", `${fmtN(r.discharge_mw, 1)} MW · ${fmtN(r.discharge_mw / 2, 1)} MWh`)}
+      ${line(tint(c, 0.45), "Charge", `${fmtN(r.charge_mw, 1)} MW · ${fmtN(r.charge_mw / 2, 1)} MWh`)}
+      ${line(css("--s2"), "FIR held", `${fmtN(r.fir_mw, 1)} MW @ $${fmtN(r.fir_price, 2)}`)}
+      ${line(css("--s3"), "SIR held", `${fmtN(r.sir_mw, 1)} MW @ $${fmtN(r.sir_price, 2)}`)}${il}
+      ${line(css("--text-secondary"), "Node price", `$${fmtN(r.price, 2)}/MWh`)}
+      ${line("", "Arbitrage", fmt$(r.arbitrage_rev))}
+      ${line("", "Reserves", fmt$(r.fir_rev + r.sir_rev))}
+      <hr><div class="lbl">Whole day</div>
+      ${line("", "Discharged / charged", `${fmtN(T.dis)} / ${fmtN(T.chg)} MWh`)}
+      ${line("", "Reserve held (FIR / SIR)", `${fmtN(T.firMwh)} / ${fmtN(T.sirMwh)} MWh`)}
+      ${line("", "Arbitrage", fmt$(T.arb))}
+      ${line("", "Reserves (FIR / SIR)", `${fmt$(T.res)} (${fmt$(T.fir)} / ${fmt$(T.sir)})`)}
+      ${line("", "<b>Total revenue</b>", `<b>${fmt$(T.tot)}</b>`)}`;
+    tip.hidden = false;
+    const card = $("#dayCard").getBoundingClientRect(), e = ev.event;
+    let left = e.clientX - card.left + 16, top = e.clientY - card.top + 12;
+    if (left + tip.offsetWidth > card.width - 8) left = e.clientX - card.left - tip.offsetWidth - 16;
+    if (top + tip.offsetHeight > card.height - 8) top = Math.max(8, card.height - tip.offsetHeight - 8);
+    tip.style.left = `${left}px`; tip.style.top = `${top}px`;
+  });
+  el.on("plotly_unhover", () => { tip.hidden = true; });
 }
 
 function displacement() {
@@ -171,7 +255,7 @@ function displacement() {
 
 function render() {
   const rows = filtered();
-  tiles(rows); revChart(rows); summaryTable(rows); detail(); displacement();
+  tiles(rows); revChart(rows); summaryTable(rows); detail(); dayView(); displacement();
 }
 
 function initControls() {
@@ -192,7 +276,13 @@ function initControls() {
   const months = [...new Set(D.profile.map((r) => r.month))].sort();
   $("#profMonth").innerHTML = months.map((m) => `<option>${m}</option>`).join("");
   $("#profMonth").value = months[months.length - 1];
-  $("#detailBess").onchange = $("#profMonth").onchange = detail;
+  $("#detailBess").onchange = () => { detail(); dayView(); };
+  $("#profMonth").onchange = detail;
+  $("#dayPick").min = first; $("#dayPick").max = last; $("#dayPick").value = last;
+  const shiftDay = (n) => { const d = new Date($("#dayPick").value + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n);
+    const v = d.toISOString().slice(0, 10); if (v >= first && v <= last) { $("#dayPick").value = v; dayView(); } };
+  $("#dayPrev").onclick = () => shiftDay(-1); $("#dayNext").onclick = () => shiftDay(1);
+  $("#dayPick").onchange = dayView;
 
   const seg = (sel, attr, key) => $(sel).addEventListener("click", (e) => {
     const b = e.target.closest("button"); if (!b) return;

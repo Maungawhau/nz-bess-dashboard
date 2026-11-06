@@ -168,12 +168,30 @@ def publish(tp, disp, registry, settings, warnings):
         top = disp.sort_values(["tight", "disp_gas_mw"], ascending=False)
         top = top[top["tight"]].nlargest(60, "bess_mw") if top["tight"].any() else top.nlargest(30, "bess_mw")
 
+    # half-hourly detail for the day view: one compact columnar file per month, loaded on demand
+    months = []
+    if not tp.empty:
+        os.makedirs(f"{OUT}/tp", exist_ok=True)
+        cols = ["date", "tp", "bess", "discharge_mw", "charge_mw", "fir_mw", "sir_mw", "fir_il_mw", "sir_il_mw",
+                "price", "fir_price", "sir_price", "arbitrage_rev", "fir_rev", "sir_rev"]
+        x = tp.reindex(columns=cols).copy()
+        x["date"] = x["date"].astype(str)
+        x["_m"] = x["date"].str[:7]
+        for m, g in x.groupby("_m"):
+            g = g.drop(columns="_m").sort_values(["date", "bess", "tp"]).fillna(0)
+            for c in cols[3:]:
+                g[c] = g[c].astype(float).round(2)
+            with open(f"{OUT}/tp/{m}.json", "w") as f:
+                json.dump({"cols": cols, "rows": g.values.tolist()}, f, separators=(",", ":"), default=str)
+            months.append(m)
+
     reg = [{k: (str(v) if k == "commissioned" else v) for k, v in b.items()} for b in registry]
     meta = {
         "generated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ"),
         "first_date": str(tp["date"].min()) if not tp.empty else None,
         "last_date": str(tp["date"].max()) if not tp.empty else None,
         "settings": {k: settings[k] for k in ("tight_market", "reference_nodes")},
+        "tp_months": sorted(months),
         "warnings": sorted(set(warnings))[-60:],
     }
     files = {"bess.json": reg, "daily.json": _jsonable(daily) if not daily.empty else [],

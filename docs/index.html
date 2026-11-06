@@ -62,6 +62,18 @@ details{margin-top:8px}
 summary{cursor:pointer;color:var(--text-secondary)}
 .note{color:var(--text-secondary);font-size:13px;max-width:900px}
 .warn li{color:var(--text-secondary);font-size:12px}
+.navbtn{font:inherit;font-size:16px;line-height:1;padding:5px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface-1);color:var(--text-primary);cursor:pointer}
+.daysum{display:flex;flex-wrap:wrap;gap:6px 22px;font-size:13px;color:var(--text-secondary);margin:4px 0 2px}
+.daysum b{color:var(--text-primary);font-variant-numeric:tabular-nums}
+.tip{position:absolute;z-index:10;pointer-events:none;min-width:260px;max-width:340px;background:var(--surface-1);border:1px solid var(--border);
+  border-radius:8px;box-shadow:0 6px 24px rgba(0,0,0,.18);padding:10px 12px;font-size:12.5px;color:var(--text-primary)}
+.tip h4{margin:0 0 6px;font-size:13px}
+.tip .row{display:flex;justify-content:space-between;gap:12px;font-variant-numeric:tabular-nums}
+.tip .row span:last-child{white-space:nowrap}
+.tip .row span:first-child{color:var(--text-secondary);display:inline-flex;align-items:center;gap:6px}
+.tip .sw{width:9px;height:9px;border-radius:2px;display:inline-block}
+.tip hr{border:0;border-top:1px solid var(--grid);margin:6px 0}
+.tip .lbl{color:var(--text-muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin:2px 0 3px}
 .section-title{margin:26px 0 10px;font-size:18px;font-weight:650}
 </style>
 </head>
@@ -102,6 +114,20 @@ summary{cursor:pointer;color:var(--text-secondary)}
     <label class="f">Battery <select id="detailBess"></select></label>
     <label class="f">Profile month <select id="profMonth"></select></label>
   </div>
+  <div class="card" id="dayCard" style="position:relative">
+    <div class="card-head">
+      <div><h2>Day view: half-hourly dispatch</h2><div class="muted">Node price (top) and MW cleared (bottom). Discharge is above zero and charging below it; lines show FIR and SIR reserve held. Hover any half-hour for the breakdown and the day's totals.</div></div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <button class="navbtn" id="dayPrev" aria-label="Previous day">‹</button>
+        <input type="date" id="dayPick">
+        <button class="navbtn" id="dayNext" aria-label="Next day">›</button>
+      </div>
+    </div>
+    <div id="daySummary" class="daysum"></div>
+    <div id="dayChart" style="width:100%;height:540px"></div>
+    <div id="dayTip" class="tip" role="tooltip" hidden></div>
+  </div>
+
   <div class="grid2">
     <div class="card"><h2>Charge &amp; discharge volume</h2><div class="muted">MWh per period; charging is shown below zero</div><div id="volChart" class="chart"></div></div>
     <div class="card"><h2>Captured prices</h2><div class="muted">Volume-weighted $/MWh at the battery node vs. the time-weighted node average</div><div id="priceChart" class="chart"></div></div>
