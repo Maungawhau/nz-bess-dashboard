@@ -29,6 +29,7 @@ PAGES = {
     "EXN": "https://www.transpower.co.nz/system-operator/notices-and-reporting/excursion-notices",
 }
 STORE = "data/events/notices.csv"
+PARSER_VERSION = "2"          # bump to re-read every stored notice after a parser change
 MONTHS = {m: i for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], 1)}
 
 # ---------------------------------------------------------------------------
@@ -97,7 +98,7 @@ def _dt(d: int, mon: str, y, hm: str) -> datetime:
 RX_DAYRANGE = re.compile(r"(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3,9})\.?\s+(\d{4}),?\s*(?:from\s*)?(\d{1,2}:\d{2})\s*(?:-|–|to)\s*(\d{1,2}:\d{2})")
 RX_SPAN = re.compile(r"(\d{1,2}:\d{2})\s+(\d{1,2})/(\d{1,2})/(\d{2,4})\s+(?:to|-|–)\s+(\d{1,2}:\d{2})\s+(\d{1,2})/(\d{1,2})/(\d{2,4})")
 RX_SPAN2 = re.compile(r"(\d{1,2})[-\s]([A-Za-z]{3,9})[-\s](\d{2,4})\s+(\d{1,2}:\d{2})\s*(?:to|-|–)\s*(\d{1,2})[-\s]([A-Za-z]{3,9})[-\s](\d{2,4})\s+(\d{1,2}:\d{2})")
-RX_TIME = re.compile(r"Time:\s*(\d{1,2})-([A-Za-z]{3})-(\d{4})\s+(\d{1,2}:\d{2})")
+RX_TIME = re.compile(r"Time:\s*(\d{1,2})\s*-\s*([A-Za-z]{3})\s*-\s*(\d{4})\s+(\d{1,2}:\d{2})")
 RX_SENT = re.compile(r"Sent:\s*(\d{1,2})-([A-Za-z]{3})-(\d{4})\s+(\d{1,2}:\d{2})")
 RX_OCCURRED = re.compile(r"occurred.{0,80}?on\s+(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3,9})\s+(\d{4})", re.S)
 RX_REVISION = re.compile(r"Revision of:\s*CAN,?\s*(\d{6,})")
@@ -111,20 +112,22 @@ def parse_text(text: str, kind: str) -> dict:
         info["sent"] = _dt(int(m.group(1)), m.group(2), m.group(3), m.group(4))
     if m := RX_REVISION.search(t):
         info["revises"] = m.group(1)
-    low = t.lower()
+    low = re.sub(r"\s+", " ", t.lower())
     info["cancelled"] = bool(re.search(r"\bcancel(l)?ed\b|has been resolved|no longer (a|an) ", low))
-    if "north and south island" in low or "national" in low[:1500]:
-        info["island"] = "NZ"
-    elif "north island" in low:
-        info["island"] = "NI"
-    elif "south island" in low:
-        info["island"] = "SI"
+    m = re.search(r"advises? that (?:an? |the )?(north island|south island|national|nz)", low) or \
+        re.search(r"(north and south islands?|north island|south island)", low)
+    if m:
+        w = m.group(1)
+        info["island"] = "NZ" if ("national" in w or "nz" == w or " and " in w) else "NI" if w.startswith("north") else "SI"
 
     wins = []
     if kind in ("freq", "trip"):
-        if m := RX_TIME.search(t):
+        if m := RX_TIME.search(re.sub(r"\s+", " ", t)):
             s = _dt(int(m.group(1)), m.group(2), m.group(3), m.group(4))
             wins.append((s, s + timedelta(minutes=1)))
+        elif info["sent"]:                          # no readable event time: excursion notices go out within minutes
+            wins.append((info["sent"] - timedelta(minutes=5), info["sent"] - timedelta(minutes=4)))
+            info["approx"] = True
     else:
         for m in RX_DAYRANGE.finditer(t):
             if m.group(2)[:3].lower() not in MONTHS:
@@ -160,6 +163,8 @@ def fetch_text(url: str) -> str:
 def update_notices(warnings: list[str]) -> pd.DataFrame:
     """Add notices we haven't seen before to the store. Network failures keep the existing store."""
     store = pd.read_csv(STORE, dtype=str).fillna("") if os.path.exists(STORE) else pd.DataFrame()
+    if not store.empty and ("v" not in store or (store["v"] != PARSER_VERSION).any()):
+        store = store[store.get("v", "") == PARSER_VERSION] if "v" in store else pd.DataFrame()   # re-read with new parser
     known = set(store["ref"]) if not store.empty else set()
     try:
         listed = list_notices()
@@ -179,7 +184,7 @@ def update_notices(warnings: list[str]) -> pd.DataFrame:
             warnings.append(f"notice {n['ref']} ({n['title']}): no affected time found")
         new.append({**n, "sent": info["sent"].isoformat() if info["sent"] else "", "island": info["island"],
                     "windows": json.dumps([[a.isoformat(), b.isoformat()] for a, b in info["windows"]]),
-                    "approx": str(info["approx"]), "revises": info["revises"], "cancelled": str(info["cancelled"])})
+                    "approx": str(info["approx"]), "revises": info["revises"], "cancelled": str(info["cancelled"]), "v": PARSER_VERSION})
     if new:
         store = pd.concat([store, pd.DataFrame(new)], ignore_index=True)
         os.makedirs(os.path.dirname(STORE), exist_ok=True)
