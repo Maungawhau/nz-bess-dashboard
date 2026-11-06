@@ -66,6 +66,29 @@ def lookup_fuel(m: dict, poc: str, unit: str) -> str:
     return m.get((poc, unit)) or m.get(poc) or m.get(poc[:3]) or "other"
 
 
+def cap_to_capability(off: pd.DataFrame) -> pd.DataFrame:
+    """Truncate each unit's tranches at what it can physically produce in that TP.
+
+    Wind and solar offer nameplate but are limited by ForecastOfGenerationPotentialMegawatts; other plant by
+    MaximumOutputMegawatts. Without this, uncleared $0 wind/solar tranches look like spare cheap supply.
+    """
+    caps = []
+    for c in ("forecast", "max_output"):
+        if c in off.columns:
+            caps.append(off[c].where(off[c] >= 0))
+    if not caps:
+        return off
+    off = off.copy()
+    off["_cap"] = pd.concat(caps, axis=1).min(axis=1)
+    off["_cap"] = off.groupby(["tp", "poc", "unit"])["_cap"].transform("min")
+    off = off.sort_values(["tp", "poc", "unit", "price"])
+    cum = off.groupby(["tp", "poc", "unit"])["mw"].cumsum()
+    before = cum - off["mw"]
+    capped = (off["_cap"] - before).clip(lower=0)
+    off["mw"] = off["mw"].where(off["_cap"].isna(), off["mw"].clip(upper=capped))
+    return off[off["mw"] > 0].drop(columns="_cap")
+
+
 def compute_day(d: date, co: pd.DataFrame, tp_bess: pd.DataFrame, registry: list[dict],
                 fmap: dict, settings: dict) -> pd.DataFrame:
     """One row per (tp, island) with BESS discharge > 0."""
@@ -79,7 +102,7 @@ def compute_day(d: date, co: pd.DataFrame, tp_bess: pd.DataFrame, registry: list
         return pd.DataFrame()
 
     off = emi.load("offers", d, ["date", "tp", "poc", "unit", "trader", "product", "flow", "tranche",
-                                 "mw", "price", "is_latest"])
+                                 "mw", "price", "is_latest", "max_output", "forecast"])
     if off is None:
         return pd.DataFrame()
     emi.require(off, ["tp", "poc", "mw", "price"], "offers")
@@ -98,6 +121,7 @@ def compute_day(d: date, co: pd.DataFrame, tp_bess: pd.DataFrame, registry: list
     key = list(zip(off["poc"].str.upper(), off["unit"].str.upper()))
     off = off[[k not in bess_units for k in key]]
     off = off[off["mw"] > 0]
+    off = cap_to_capability(off)
 
     isl = co.dropna(subset=["island"]).drop_duplicates("poc").set_index("poc")["island"].str.upper().str[:2]
     isl = isl.replace({"NO": "NI", "SO": "SI"})

@@ -66,6 +66,8 @@ COLUMNS = {
     "price": ["DollarsPerMegawattHour", "Price", "PriceDollarsPerMegawattHour", "DollarsPerMWh", "Dollars"],
     "load_mw": ["LoadMegawatts", "LoadMW", "Load", "LoadMegawatts", "DispatchedLoad"],
     "gen_mw": ["GenerationMegawatts", "GenerationMW", "Generation", "GenerationMegawatts", "DispatchedGeneration"],
+    "max_output": ["MaximumOutputMegawatts"],
+    "forecast": ["ForecastOfGenerationPotentialMegawatts"],
     "tranche": ["Tranche", "Band", "TrancheNumber"],
     "is_latest": ["IsLatestYesNo", "IsLatest"],
     "fuel": ["FuelType", "Fuel", "FuelCode", "Fuel_Code", "FuelCode", "PrimaryFuel"],
@@ -203,7 +205,7 @@ def load(key: str, d: date, wanted: list[str]) -> pd.DataFrame | None:
         df["date"] = parse_dates(df["date"])
     if "tp" in df.columns:
         df["tp"] = pd.to_numeric(df["tp"], errors="coerce").astype("Int64")
-    for c in ("mw", "mw_energy", "mw_fir", "mw_sir", "price", "load_mw", "gen_mw", "capacity"):
+    for c in ("mw", "mw_energy", "mw_fir", "mw_sir", "price", "load_mw", "gen_mw", "capacity", "max_output", "forecast"):
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
     for c in ("poc", "unit", "trader", "island", "product", "reserve_type", "flow", "name"):
