@@ -29,7 +29,7 @@ PAGES = {
     "EXN": "https://www.transpower.co.nz/system-operator/notices-and-reporting/excursion-notices",
 }
 STORE = "data/events/notices.csv"
-PARSER_VERSION = "2"          # bump to re-read every stored notice after a parser change
+PARSER_VERSION = "3"          # bump to re-read every stored notice after a parser change
 MONTHS = {m: i for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], 1)}
 
 # ---------------------------------------------------------------------------
@@ -98,15 +98,15 @@ def _dt(d: int, mon: str, y, hm: str) -> datetime:
 RX_DAYRANGE = re.compile(r"(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3,9})\.?\s+(\d{4}),?\s*(?:from\s*)?(\d{1,2}:\d{2})\s*(?:-|–|to)\s*(\d{1,2}:\d{2})")
 RX_SPAN = re.compile(r"(\d{1,2}:\d{2})\s+(\d{1,2})/(\d{1,2})/(\d{2,4})\s+(?:to|-|–)\s+(\d{1,2}:\d{2})\s+(\d{1,2})/(\d{1,2})/(\d{2,4})")
 RX_SPAN2 = re.compile(r"(\d{1,2})[-\s]([A-Za-z]{3,9})[-\s](\d{2,4})\s+(\d{1,2}:\d{2})\s*(?:to|-|–)\s*(\d{1,2})[-\s]([A-Za-z]{3,9})[-\s](\d{2,4})\s+(\d{1,2}:\d{2})")
-RX_TIME = re.compile(r"Time:\s*(\d{1,2})\s*-\s*([A-Za-z]{3})\s*-\s*(\d{4})\s+(\d{1,2}:\d{2})")
-RX_SENT = re.compile(r"Sent:\s*(\d{1,2})-([A-Za-z]{3})-(\d{4})\s+(\d{1,2}:\d{2})")
+RX_TIME = re.compile(r"Time:\s*(\d{1,2})\s*-\s*([A-Za-z]{3,9})\s*-\s*(\d{4})\s+(\d{1,2}:\d{2})")
+RX_SENT = re.compile(r"Sent:\s*(\d{1,2})-([A-Za-z]{3,9})-(\d{4})\s+(\d{1,2}:\d{2})")
 RX_OCCURRED = re.compile(r"occurred.{0,80}?on\s+(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3,9})\s+(\d{4})", re.S)
 RX_REVISION = re.compile(r"Revision of:\s*CAN,?\s*(\d{6,})")
 
 
 def parse_text(text: str, kind: str) -> dict:
     """Extract sent time, island, windows [(start, end)], superseded ref and cancellation."""
-    t = re.sub(r"[ \t]+", " ", text)
+    t = re.sub(r"[ \t\u00a0\u2009\u202f]+", " ", text)
     info = {"sent": None, "island": "", "windows": [], "approx": False, "revises": "", "cancelled": False}
     if m := RX_SENT.search(t):
         info["sent"] = _dt(int(m.group(1)), m.group(2), m.group(3), m.group(4))
