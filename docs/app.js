@@ -1,156 +1,208 @@
-// NZ BESS dashboard - reads the JSON written nightly by pipeline/build.py and aggregates in the browser.
+// NZ BESS revenue dashboard - reads JSON written nightly by pipeline/build.py.
+// Colour rules: --b1..--b8 identify batteries (only batteries); --arb/--res/--fir/--sir are neutral
+// revenue-stream colours; the calendar uses a blue/red diverging scale for magnitude.
 const $ = (s) => document.querySelector(s);
 const css = (v) => getComputedStyle($(".viz-root")).getPropertyValue(v).trim();
-const SLOTS = ["--s1", "--s2", "--s3", "--s4", "--s5", "--s6", "--s7", "--s8"];
-const state = { dayMode: "day", gran: "month", split: "bess", tight: "all", sel: new Set(), from: null, to: null };
-let D = {};
+const D = {};
+const S = { tab: "overview", from: null, to: null, sel: new Set(), gran: "month", split: "bess", hour: "arb", bess: null, dayMode: "day" };
 
+// ---------- formatting ----------
+const fmtN = (v, d = 0) => (v == null || !isFinite(v) ? "–" : v.toLocaleString("en-NZ", { maximumFractionDigits: d, minimumFractionDigits: d }));
 const fmt$ = (v) => {
   if (v == null || !isFinite(v)) return "–";
   const a = Math.abs(v), s = v < 0 ? "−" : "";
-  return s + (a >= 1e6 ? `$${(a / 1e6).toFixed(2)}m` : a >= 1e4 ? `$${(a / 1e3).toFixed(0)}k` : `$${a.toLocaleString("en-NZ", { maximumFractionDigits: 0 })}`);
+  return s + (a >= 1e6 ? `$${(a / 1e6).toFixed(2)}m` : a >= 1e4 ? `$${(a / 1e3).toFixed(0)}k` : `$${fmtN(a)}`);
 };
+const fmtMWh = (v) => (Math.abs(v) >= 1000 ? `${fmtN(v / 1000, 1)} GWh` : `${fmtN(v)} MWh`);
 const tint = (hex, a) => { const h = hex.replace("#", ""); const n = parseInt(h.length === 3 ? h.replace(/./g, "$&$&") : h, 16);
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`; };
-const fmtN = (v, d = 0) => (v == null || !isFinite(v) ? "–" : v.toLocaleString("en-NZ", { maximumFractionDigits: d, minimumFractionDigits: d }));
-const fmtMWh = (v) => (Math.abs(v) >= 1000 ? `${fmtN(v / 1000, 1)} GWh` : `${fmtN(v)} MWh`);
+const addDays = (d, n) => { const x = new Date(d + "T00:00:00Z"); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+const nDays = (a, b) => Math.round((new Date(b) - new Date(a)) / 864e5) + 1;
+const weekOf = (d) => { const x = new Date(d + "T00:00:00Z"); x.setUTCDate(x.getUTCDate() - ((x.getUTCDay() + 6) % 7)); return x.toISOString().slice(0, 10); };
+const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const prettyDate = (d) => `${+d.slice(8)} ${MON[+d.slice(5, 7) - 1]} ${d.slice(0, 4)}`;
+const shortDate = (d) => `${+d.slice(8)} ${MON[+d.slice(5, 7) - 1]} ${d.slice(2, 4)}`;
+const monthLabel = (m) => `${MON[+m.slice(5, 7) - 1]} ${m.slice(2, 4)}`;
 
-function periodKey(dateStr, g) {
-  const d = new Date(dateStr + "T00:00:00Z");
-  if (g === "day") return dateStr;
-  if (g === "month") return dateStr.slice(0, 7);
-  if (g === "year") return dateStr.slice(0, 4);
-  const day = (d.getUTCDay() + 6) % 7; // Monday-based week, keyed by its Monday
-  d.setUTCDate(d.getUTCDate() - day);
-  return d.toISOString().slice(0, 10);
-}
-const periodLabel = (k) => (state.gran === "week" ? `wk of ${k}` : k);
+const bess = (id) => D.bess.find((b) => b.id === id);
+const colorOf = (id) => css(`--b${(D.bess.findIndex((b) => b.id === id) % 8) + 1}`);
+const swatch = (id) => `<i class="sw" style="background:${colorOf(id)}"></i>`;
 
-function colorOf(id) {
-  const i = D.bess.findIndex((b) => b.id === id);
-  return css(SLOTS[i % SLOTS.length]);
-}
-
+// ---------- plotly base ----------
 function layout(extra = {}) {
   const t = css("--text-secondary"), g = css("--grid");
-  return Object.assign({
-    margin: { l: 64, r: 16, t: 10, b: 44 }, paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
+  const base = {
+    margin: { l: 68, r: 16, t: 8, b: 44 }, paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
     font: { family: "system-ui, sans-serif", size: 12, color: t },
     xaxis: { gridcolor: g, linecolor: g, tickcolor: g, zeroline: false },
-    yaxis: { gridcolor: g, linecolor: g, zerolinecolor: css("--neutral"), tickcolor: g },
-    legend: { orientation: "h", y: -0.18, x: 0 }, hovermode: "x unified", bargap: 0.25,
+    yaxis: { gridcolor: g, linecolor: g, zerolinecolor: css("--text-muted"), tickcolor: g },
+    legend: { orientation: "h", y: -0.16, x: 0 }, bargap: 0.25,
     hoverlabel: { bgcolor: css("--surface-1"), bordercolor: css("--border"), font: { color: css("--text-primary") } },
-  }, extra);
+  };
+  for (const [k, v] of Object.entries(extra)) base[k] = (typeof v === "object" && !Array.isArray(v) && base[k]) ? { ...base[k], ...v } : v;
+  return base;
 }
 const cfg = { displayModeBar: false, responsive: true };
-const pAxis = () => ({ ...layout().xaxis, type: state.gran === "day" ? "date" : "category" });
+const money = { tickprefix: "$", tickformat: "~s" };
 
-function filtered() {
-  return D.daily.filter((r) => state.sel.has(r.bess) && r.date >= state.from && r.date <= state.to);
+// ---------- data helpers ----------
+const inRange = (r) => r.date >= S.from && r.date <= S.to;
+const sel = () => D.bess.filter((b) => S.sel.has(b.id));
+function sum(rows) {
+  const t = {};
+  for (const r of rows) for (const [k, v] of Object.entries(r)) if (typeof v === "number") t[k] = (t[k] || 0) + v;
+  t.n = rows.length;
+  ["discharge_mwh", "charge_mwh", "arbitrage_rev", "reserve_rev", "fir_rev", "sir_rev", "total_rev", "discharge_rev", "charge_cost", "fir_mwh", "sir_mwh"].forEach((k) => (t[k] = t[k] || 0));
+  t.sell = t.discharge_mwh ? t.discharge_rev / t.discharge_mwh : NaN;
+  t.buy = t.charge_mwh ? t.charge_cost / t.charge_mwh : NaN;
+  return t;
 }
+const perMWyr = (rev, mwDays) => (mwDays ? (rev / mwDays) * 365 : NaN);
+const active = (r) => r.date >= (D.start[r.bess] || "9999");          // on or after the battery's first active day
+const shortName = (id) => bess(id).name.replace(/ BESS$/, "");
 
-function aggregate(rows, keyFn) {
-  const m = new Map();
-  for (const r of rows) {
-    const k = keyFn(r);
-    const a = m.get(k) || {};
-    for (const [f, v] of Object.entries(r)) if (typeof v === "number") a[f] = (a[f] || 0) + v;
-    a._n = (a._n || 0) + 1;
-    m.set(k, a);
-  }
-  return m;
-}
-
-function tiles(rows) {
-  const s = aggregate(rows, () => "all").get("all") || {};
-  const dp = s.discharge_mwh ? s.discharge_rev / s.discharge_mwh : NaN;
-  const cp = s.charge_mwh ? s.charge_cost / s.charge_mwh : NaN;
-  const disp = D.disp.filter((r) => r.date >= state.from && r.date <= state.to);
-  const th = disp.reduce((a, r) => a + r.thermal_mwh, 0), bm = disp.reduce((a, r) => a + r.bess_mwh, 0);
-  const T = [
-    ["Total revenue", fmt$(s.total_rev || 0), `${state.sel.size} batter${state.sel.size === 1 ? "y" : "ies"}`],
-    ["Arbitrage", fmt$(s.arbitrage_rev || 0), s.total_rev ? `${fmtN((100 * s.arbitrage_rev) / s.total_rev)}% of total` : ""],
-    ["Reserves (FIR + SIR)", fmt$(s.reserve_rev || 0), `FIR ${fmt$(s.fir_rev || 0)} · SIR ${fmt$(s.sir_rev || 0)}`],
-    ["Discharged", fmtMWh(s.discharge_mwh || 0), `charged ${fmtMWh(s.charge_mwh || 0)}`],
-    ["Average spread", isFinite(dp - cp) ? `$${fmtN(dp - cp)}/MWh` : "–", `sell $${fmtN(dp)} · buy $${fmtN(cp)}`],
-    ["Thermal displaced", fmtMWh(th), bm ? `${fmtN((100 * th) / bm)}% of all BESS discharge` : "indicative"],
+// =============== OVERVIEW ===============
+function overview() {
+  const rows = D.daily.filter((r) => S.sel.has(r.bess) && inRange(r));
+  const t = sum(rows);
+  const mwDays = rows.filter(active).reduce((a, r) => a + (bess(r.bess).power_mw || 0), 0);
+  const tiles = [
+    ["Total revenue", fmt$(t.total_rev), `${prettyDate(S.from)} – ${prettyDate(S.to)}`],
+    ["From arbitrage", fmt$(t.arbitrage_rev), t.total_rev ? `${fmtN((100 * t.arbitrage_rev) / t.total_rev)}% of total` : ""],
+    ["From reserves", fmt$(t.reserve_rev), `FIR ${fmt$(t.fir_rev)} · SIR ${fmt$(t.sir_rev)}`],
+    ["Revenue per MW", isFinite(perMWyr(t.total_rev, mwDays)) ? `${fmt$(perMWyr(t.total_rev, mwDays))}/yr` : "–", "annualised, all selected batteries"],
+    ["Energy discharged", fmtMWh(t.discharge_mwh), `sold at $${fmtN(t.sell)}/MWh on average`],
   ];
-  $("#tiles").innerHTML = T.map(([k, v, d]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join("");
+  $("#tiles").innerHTML = tiles.map(([k, v, d]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join("");
+  cumChart(rows); perChart(rows); calChart(rows); hourChart(); topTables(rows); cmpTable(rows);
 }
 
-function revChart(rows) {
-  const keys = [...new Set(rows.map((r) => periodKey(r.date, state.gran)))].sort();
-  let traces;
-  if (state.split === "bess") {
-    traces = D.bess.filter((b) => state.sel.has(b.id)).map((b) => {
-      const m = aggregate(rows.filter((r) => r.bess === b.id), (r) => periodKey(r.date, state.gran));
-      return { type: "bar", name: b.name, x: keys.map(periodLabel), y: keys.map((k) => m.get(k)?.total_rev || 0),
-        marker: { color: colorOf(b.id), line: { color: css("--surface-1"), width: 1 } },
-        hovertemplate: "%{y:$,.0f}<extra>" + b.name + "</extra>" };
-    });
-  } else {
-    const m = aggregate(rows, (r) => periodKey(r.date, state.gran));
-    traces = [["arbitrage_rev", "Arbitrage", "--s1"], ["fir_rev", "FIR reserve", "--s2"], ["sir_rev", "SIR reserve", "--s3"]].map(([f, n, c]) => ({
-      type: "bar", name: n, x: keys.map(periodLabel), y: keys.map((k) => m.get(k)?.[f] || 0),
-      marker: { color: css(c), line: { color: css("--surface-1"), width: 1 } }, hovertemplate: "%{y:$,.0f}<extra>" + n + "</extra>" }));
-  }
-  Plotly.react("revChart", traces, layout({ barmode: "relative", xaxis: pAxis(), yaxis: { ...layout().yaxis, tickprefix: "$", tickformat: "~s", title: { text: "NZD" } } }), cfg);
+function cumChart(rows) {
+  const dates = []; for (let d = S.from; d <= S.to; d = addDays(d, 1)) dates.push(d);
+  const traces = sel().map((b) => {
+    const by = Object.fromEntries(rows.filter((r) => r.bess === b.id).map((r) => [r.date, r.total_rev]));
+    let c = 0; const y = dates.map((d) => (c += by[d] || 0));
+    return { type: "scatter", mode: "lines", name: b.name, x: dates, y, line: { color: colorOf(b.id), width: 2.5 },
+      hovertemplate: `%{x|%d %b}: %{y:$,.0f}<extra>${b.name}</extra>` };
+  });
+  Plotly.react("cumChart", traces, layout({ hovermode: "x unified", yaxis: { ...money, title: { text: "cumulative revenue" } }, xaxis: { type: "date" } }), cfg);
 }
 
-function summaryTable(rows) {
-  const m = aggregate(rows, (r) => r.bess);
-  const days = Math.max(1, (new Date(state.to) - new Date(state.from)) / 864e5 + 1);
-  const H = ["Battery", "MW / MWh", "Discharge MWh", "Charge MWh", "RTE", "Cycles/day", "Sell $/MWh", "Buy $/MWh", "Spread", "Arbitrage", "FIR", "SIR", "Total", "$/MW-yr (ann.)"];
-  let html = `<thead><tr>${H.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>`;
-  for (const b of D.bess.filter((b) => state.sel.has(b.id))) {
-    const s = m.get(b.id);
-    if (!s) { html += `<tr><td>${b.name}</td><td colspan="${H.length - 1}" style="text-align:left" class="muted">no data in range</td></tr>`; continue; }
-    const dp = s.discharge_mwh ? s.discharge_rev / s.discharge_mwh : NaN, cp = s.charge_mwh ? s.charge_cost / s.charge_mwh : NaN;
-    const active = Math.min(days, s._n);
-    const flag = b.auto ? '<span class="badge">auto-detected</span>' : !b.load_unit ? '<span class="badge">no charging data</span>' : "";
-    html += `<tr><td><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${colorOf(b.id)};margin-right:6px"></span>${b.name}${flag}</td>
-      <td>${fmtN(b.power_mw)} / ${fmtN(b.energy_mwh)}</td><td>${fmtN(s.discharge_mwh)}</td><td>${fmtN(s.charge_mwh)}</td>
-      <td>${s.charge_mwh ? fmtN((100 * s.discharge_mwh) / s.charge_mwh) + "%" : "–"}</td>
-      <td>${b.energy_mwh ? fmtN(s.discharge_mwh / b.energy_mwh / active, 2) : "–"}</td>
-      <td>${fmtN(dp)}</td><td>${fmtN(cp)}</td><td>${fmtN(dp - cp)}</td>
-      <td>${fmt$(s.arbitrage_rev)}</td><td>${fmt$(s.fir_rev)}</td><td>${fmt$(s.sir_rev)}</td><td><b>${fmt$(s.total_rev)}</b></td>
-      <td>${b.power_mw ? fmt$((s.total_rev / b.power_mw) * (365 / active)) : "–"}</td></tr>`;
-  }
-  $("#sumTable").innerHTML = html + "</tbody>";
+function perChart(rows) {
+  const key = (d) => (S.gran === "month" ? d.slice(0, 7) : weekOf(d));
+  const keys = [...new Set(rows.map((r) => key(r.date)))].sort();
+  const lab = keys.map((k) => (S.gran === "month" ? monthLabel(k) : `${+k.slice(8)} ${MON[+k.slice(5, 7) - 1]}`));
+  $("#perTitle").textContent = S.gran === "month" ? "Revenue each month" : "Revenue each week";
+  $("#perSub").textContent = S.split === "bess" ? "Stacked by battery" : "All selected batteries, split into arbitrage and reserves";
+  const agg = (filter, f) => { const m = {}; rows.filter(filter).forEach((r) => { const k = key(r.date); m[k] = (m[k] || 0) + r[f]; }); return keys.map((k) => m[k] || 0); };
+  const traces = S.split === "bess"
+    ? sel().map((b) => ({ type: "bar", name: b.name, x: lab, y: agg((r) => r.bess === b.id, "total_rev"),
+        marker: { color: colorOf(b.id), line: { color: css("--surface-1"), width: 1 } }, hovertemplate: `%{y:$,.0f}<extra>${b.name}</extra>` }))
+    : [["arbitrage_rev", "Arbitrage", "--arb"], ["reserve_rev", "Reserves", "--res"]].map(([f, n, c]) => ({ type: "bar", name: n, x: lab, y: agg(() => true, f),
+        marker: { color: css(c), line: { color: css("--surface-1"), width: 1 } }, hovertemplate: `%{y:$,.0f}<extra>${n}</extra>` }));
+  Plotly.react("perChart", traces, layout({ barmode: "relative", hovermode: "x unified", xaxis: { type: "category" }, yaxis: { ...money, title: { text: "revenue" } } }), cfg);
 }
 
-function detail() {
-  const id = $("#detailBess").value, b = D.bess.find((x) => x.id === id);
-  if (!b) return;
-  const rows = D.daily.filter((r) => r.bess === id && r.date >= state.from && r.date <= state.to);
-  const keys = [...new Set(rows.map((r) => periodKey(r.date, state.gran)))].sort();
-  const m = aggregate(rows, (r) => periodKey(r.date, state.gran));
-  const x = keys.map(periodLabel), c = colorOf(id);
-  Plotly.react("volChart", [
-    { type: "bar", name: "Discharge", x, y: keys.map((k) => m.get(k).discharge_mwh), marker: { color: c }, hovertemplate: "%{y:,.0f} MWh<extra>Discharge</extra>" },
-    { type: "bar", name: "Charge", x, y: keys.map((k) => -m.get(k).charge_mwh), marker: { color: tint(c, 0.45) }, hovertemplate: "%{y:,.0f} MWh<extra>Charge</extra>" },
-  ], layout({ barmode: "relative", xaxis: pAxis(), yaxis: { ...layout().yaxis, title: { text: "MWh" } } }), cfg);
-  const pr = (k, a, b2) => (m.get(k)[b2] ? m.get(k)[a] / m.get(k)[b2] : null);
-  Plotly.react("priceChart", [
-    { type: "scatter", mode: "lines+markers", name: "Sell (discharge)", x, y: keys.map((k) => pr(k, "discharge_rev", "discharge_mwh")), line: { color: css("--s1"), width: 2 }, marker: { size: 8 } },
-    { type: "scatter", mode: "lines+markers", name: "Buy (charge)", x, y: keys.map((k) => pr(k, "charge_cost", "charge_mwh")), line: { color: css("--s2"), width: 2 }, marker: { size: 8 } },
-    { type: "scatter", mode: "lines", name: "Node average", x, y: keys.map((k) => m.get(k).node_price_avg / m.get(k)._n), line: { color: css("--neutral"), width: 2, dash: "dot" } },
-  ], layout({ xaxis: pAxis(), yaxis: { ...layout().yaxis, tickprefix: "$", title: { text: "$/MWh" } }, hovermode: "x unified" }), cfg);
+function calChart(rows) {
+  const dates = []; for (let d = S.from; d <= S.to; d = addDays(d, 1)) dates.push(d);
+  const bs = sel().slice().reverse();
+  const by = {}; rows.forEach((r) => (by[r.bess + r.date] = r));
+  const z = bs.map((b) => dates.map((d) => (by[b.id + d] ? by[b.id + d].total_rev : null)));
+  const vals = z.flat().filter((v) => v != null).map(Math.abs).sort((a, b) => a - b);
+  const cap = vals.length ? vals[Math.floor(vals.length * 0.97)] || 1 : 1;
+  const text = bs.map((b) => dates.map((d) => { const r = by[b.id + d]; return r
+    ? `<b>${b.name}</b> · ${prettyDate(d)}<br>Total ${fmt$(r.total_rev)}<br>Arbitrage ${fmt$(r.arbitrage_rev)} · Reserves ${fmt$(r.reserve_rev)}<br>Peak price $${fmtN(r.node_price_max)}/MWh`
+    : `${b.name} · ${prettyDate(d)}<br>no data`; }));
+  Plotly.react("calChart", [{
+    type: "heatmap", x: dates, y: bs.map((b) => b.name), z, text, hoverinfo: "text", xgap: 1, ygap: 3, zmid: 0, zmin: -cap, zmax: cap,
+    colorscale: [[0, css("--neg")], [0.5, css("--mid")], [1, css("--pos")]],
+    colorbar: { thickness: 10, len: 0.9, tickprefix: "$", tickformat: "~s", outlinewidth: 0 },
+  }], layout({ margin: { l: 150, r: 10, t: 6, b: 34 }, xaxis: { type: "date", showgrid: false }, yaxis: { showgrid: false } }), cfg);
+  const el = document.getElementById("calChart");
+  el.removeAllListeners?.("plotly_click");
+  el.on("plotly_click", (ev) => { const p = ev.points[0]; const b = bs[p.pointNumber[0]]; openDay(b.id, p.x.slice(0, 10)); });
 }
 
-// ---------- Day view: 48 half-hours for one battery ----------
+function hourChart() {
+  const f = S.hour === "arb" ? 3 : 4;
+  $("#hourSub").textContent = S.hour === "arb"
+    ? "Total arbitrage $ by hour of day (NZ time, hour starting) over the period. Charging hours show as negative (energy bought), discharge hours as positive (energy sold)."
+    : "Total reserve $ by hour of day (NZ time, hour starting) over the period: when the batteries are paid to stand by.";
+  const traces = sel().map((b) => {
+    const y = Array(24).fill(0);
+    D.hourly.rows.forEach((r) => { if (r[1] === b.id && r[0] >= S.from && r[0] <= S.to) y[r[2]] += r[f]; });
+    return { type: "bar", name: b.name, x: y.map((_, h) => `${String(h).padStart(2, "0")}:00`), y, marker: { color: colorOf(b.id), line: { color: css("--surface-1"), width: 1 } },
+      hovertemplate: `%{y:$,.0f}<extra>${b.name}</extra>` };
+  });
+  Plotly.react("hourChart", traces, layout({ barmode: "relative", hovermode: "x unified", xaxis: { type: "category" }, yaxis: { ...money, title: { text: S.hour === "arb" ? "net arbitrage" : "reserve revenue" } } }), cfg);
+}
+
+function topTables(rows) {
+  const arb = rows.slice().sort((a, b) => b.arbitrage_rev - a.arbitrage_rev).slice(0, 10);
+  $("#topArb").innerHTML = `<thead><tr><th>Date</th><th class="l">Battery</th><th>Arbitrage</th><th>Sold</th><th>Sell / buy $</th><th>Peak $</th></tr></thead><tbody>` +
+    arb.map((r) => `<tr class="click" data-b="${r.bess}" data-d="${r.date}"><td>${shortDate(r.date)}</td><td class="l">${swatch(r.bess)} ${shortName(r.bess)}</td>
+      <td><b>${fmt$(r.arbitrage_rev)}</b></td><td>${fmtN(r.discharge_mwh)} MWh</td><td>${fmtN(r.discharge_mwh ? r.discharge_rev / r.discharge_mwh : NaN)} / ${fmtN(r.charge_mwh ? r.charge_cost / r.charge_mwh : NaN)}</td>
+      <td>${fmtN(r.node_price_max)}</td></tr>`).join("") + "</tbody>";
+  const res = rows.slice().sort((a, b) => b.reserve_rev - a.reserve_rev).slice(0, 10);
+  $("#topRes").innerHTML = `<thead><tr><th>Date</th><th class="l">Battery</th><th>Reserves</th><th>FIR</th><th>SIR</th><th>Avg MW held</th></tr></thead><tbody>` +
+    res.map((r) => `<tr class="click" data-b="${r.bess}" data-d="${r.date}"><td>${shortDate(r.date)}</td><td class="l">${swatch(r.bess)} ${shortName(r.bess)}</td>
+      <td><b>${fmt$(r.reserve_rev)}</b></td><td>${fmt$(r.fir_rev)}</td><td>${fmt$(r.sir_rev)}</td><td>${fmtN((r.fir_mwh + r.sir_mwh) / 24)}</td></tr>`).join("") + "</tbody>";
+}
+
+function cmpTable(rows) {
+  const H = ["Battery", "Size", "Total revenue", "Arbitrage", "Reserves", "% from arbitrage", "Revenue per MW (annualised)"];
+  $("#cmpTable").innerHTML = `<thead><tr>${H.map((h, i) => `<th class="${i < 2 ? "l" : ""}">${h}</th>`).join("")}</tr></thead><tbody>` + sel().map((b) => {
+    const r = rows.filter((x) => x.bess === b.id); const t = sum(r);
+    if (!r.length) return `<tr><td>${swatch(b.id)} ${b.name}</td><td colspan="${H.length - 1}" class="l muted">no data in this period</td></tr>`;
+    return `<tr class="click" data-b="${b.id}"><td>${swatch(b.id)} ${b.name}${b.auto ? '<span class="badge">auto-detected</span>' : ""}</td><td class="l">${fmtN(b.power_mw)} MW / ${fmtN(b.energy_mwh)} MWh</td>
+      <td><b>${fmt$(t.total_rev)}</b></td><td>${fmt$(t.arbitrage_rev)}</td><td>${fmt$(t.reserve_rev)}</td>
+      <td>${t.total_rev > 0 ? fmtN((100 * t.arbitrage_rev) / t.total_rev) + "%" : "–"}</td><td>${fmt$(perMWyr(t.total_rev, r.filter(active).length * b.power_mw))}/MW-yr</td></tr>`;
+  }).join("") + "</tbody>";
+}
+
+// =============== BATTERY ===============
+function battery() {
+  const b = bess(S.bess); if (!b) return;
+  const all = D.daily.filter((r) => r.bess === b.id);
+  const rows = all.filter(inRange), t = sum(rows);
+  $("#bInfo").textContent = `${b.owner || ""} · ${fmtN(b.power_mw)} MW / ${fmtN(b.energy_mwh)} MWh · ${b.poc} (${b.gen_unit || "?"}/${b.load_unit || "?"}) · period ${prettyDate(S.from)} – ${prettyDate(S.to)}`;
+  $("#bTiles").innerHTML = [
+    ["Total revenue", fmt$(t.total_rev), `${fmt$(perMWyr(t.total_rev, rows.filter(active).length * b.power_mw))} per MW per year (annualised)`],
+    ["From arbitrage", fmt$(t.arbitrage_rev), t.total_rev > 0 ? `${fmtN((100 * t.arbitrage_rev) / t.total_rev)}% of total` : ""],
+    ["From reserves", fmt$(t.reserve_rev), `FIR ${fmt$(t.fir_rev)} · SIR ${fmt$(t.sir_rev)}`],
+    ["Sell vs buy price", `$${fmtN(t.sell)} / $${fmtN(t.buy)}`, `spread $${fmtN(t.sell - t.buy)}/MWh`],
+  ].map(([k, v, d]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join("");
+
+  const months = [...new Set(all.map((r) => r.date.slice(0, 7)))].sort();
+  const m = (f) => months.map((k) => all.filter((r) => r.date.startsWith(k)).reduce((a, r) => a + r[f], 0));
+  Plotly.react("bMonthChart", [
+    { type: "bar", name: "Arbitrage", x: months.map(monthLabel), y: m("arbitrage_rev"), marker: { color: css("--arb") }, hovertemplate: "%{y:$,.0f}<extra>Arbitrage</extra>" },
+    { type: "bar", name: "Reserves", x: months.map(monthLabel), y: m("reserve_rev"), marker: { color: css("--res") }, hovertemplate: "%{y:$,.0f}<extra>Reserves</extra>" },
+  ], layout({ barmode: "relative", hovermode: "x unified", xaxis: { type: "category" }, yaxis: { ...money, title: { text: "revenue" } } }), cfg);
+
+  const nAct = rows.filter(active).length || 1;
+  const stats = [
+    ["Energy discharged", fmtMWh(t.discharge_mwh)], ["Energy charged", fmtMWh(t.charge_mwh)],
+    ["Round-trip efficiency (dispatch)", t.charge_mwh ? `${fmtN((100 * t.discharge_mwh) / t.charge_mwh)}%` : "–"],
+    ["Full cycles per day", b.energy_mwh ? fmtN(t.discharge_mwh / b.energy_mwh / nAct, 2) : "–"],
+    ["Average sell price", `$${fmtN(t.sell)}/MWh`], ["Average buy price", `$${fmtN(t.buy)}/MWh`],
+    ["Average FIR held", `${fmtN(t.fir_mwh / 24 / nAct)} MW`], ["Average SIR held", `${fmtN(t.sir_mwh / 24 / nAct)} MW`],
+    ["First active day", prettyDate(D.start[b.id])], ["Active days in period", fmtN(rows.filter(active).length)],
+  ];
+  $("#bStats").innerHTML = "<tbody>" + stats.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("") + "</tbody>";
+  dayOrWeek();
+}
+
+// ---------- Day / Week view: three stacked panels (price, energy, reserves) ----------
 const tpCache = {};
-async function tpMonth(m) {
-  if (!tpCache[m]) {
-    tpCache[m] = fetch(`data/tp/${m}.json?v=${D.meta.generated_utc}`).then((r) => (r.ok ? r.json() : { cols: [], rows: [] }))
-      .then((j) => j.rows.map((r) => Object.fromEntries(j.cols.map((c, i) => [c, r[i]]))));
-  }
+function tpMonth(m) {
+  if (!tpCache[m]) tpCache[m] = fetch(`data/tp/${m}.json?v=${D.meta.generated_utc}`).then((r) => (r.ok ? r.json() : { cols: [], rows: [] }))
+    .then((j) => j.rows.map((r) => Object.fromEntries(j.cols.map((c, i) => [c, r[i]]))));
   return tpCache[m];
 }
 const tpTime = (tp) => { const m = (tp - 1) * 30; return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`; };
-
-const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-function tipLine(sw, k, v) { return `<div class="row"><span>${sw ? `<i class="sw" style="background:${sw}"></i>` : ""}${k}</span><span>${v}</span></div>`; }
+const tipLine = (sw, k, v) => `<div class="row"><span>${sw ? `<i class="sw" style="background:${sw}"></i>` : ""}${k}</span><span>${v}</span></div>`;
 function placeTip(ev) {
   const tip = $("#dayTip"), card = $("#dayCard").getBoundingClientRect(), e = ev.event;
   tip.hidden = false;
@@ -159,210 +211,162 @@ function placeTip(ev) {
   if (top + tip.offsetHeight > card.height - 8) top = Math.max(8, card.height - tip.offsetHeight - 8);
   tip.style.left = `${left}px`; tip.style.top = `${top}px`;
 }
-function totals(rows) {   // rows of daily.json
-  const S = (f) => rows.reduce((a, r) => a + (r[f] || 0), 0);
-  const T = { dis: S("discharge_mwh"), chg: S("charge_mwh"), arb: S("arbitrage_rev"), fir: S("fir_rev"), sir: S("sir_rev"),
-    firMwh: S("fir_mwh"), sirMwh: S("sir_mwh"), disRev: S("discharge_rev"), chgCost: S("charge_cost") };
-  T.res = T.fir + T.sir; T.tot = T.arb + T.res;
-  T.sell = T.dis ? T.disRev / T.dis : NaN; T.buy = T.chg ? T.chgCost / T.chg : NaN;
-  return T;
+function threePanel(x, price, dis, chg, fir, sir, c, units, isDay) {
+  const ln = (shape) => (isDay ? { shape: "hv" } : {});
+  const traces = [
+    { type: "scatter", mode: isDay ? "lines" : "lines+markers", name: isDay ? "Node price" : "Node price (daily avg)", x, y: price, line: { color: css("--price"), width: 2, ...ln() }, marker: { size: 7 }, yaxis: "y3" },
+    { type: "bar", name: "Discharge (sold)", x, y: dis, marker: { color: c }, yaxis: "y2" },
+    { type: "bar", name: "Charge (bought)", x, y: chg.map((v) => (v == null ? null : -v)), marker: { color: tint(c, 0.4) }, yaxis: "y2" },
+    { type: "scatter", mode: isDay ? "lines" : "lines+markers", name: "FIR held", x, y: fir, line: { color: css("--fir"), width: 2, ...ln() }, marker: { size: 7 }, yaxis: "y" },
+    { type: "scatter", mode: isDay ? "lines" : "lines+markers", name: "SIR held", x, y: sir, line: { color: css("--sir"), width: 2, dash: "dot", ...ln() }, marker: { size: 7 }, yaxis: "y" },
+  ].map((t) => ({ ...t, hoverinfo: "none" }));
+  const ay = layout().yaxis, sp = { showspikes: true, spikemode: "across", spikethickness: 1, spikedash: "solid", spikecolor: css("--text-muted") };
+  Plotly.react("dayChart", traces, layout({
+    barmode: "relative", hovermode: "x", bargap: isDay ? 0.15 : 0.35, legend: { orientation: "h", y: -0.07, x: 0 }, margin: { l: 72, r: 16, t: 18, b: 36 },
+    xaxis: { type: "category", nticks: isDay ? 13 : 8, ...sp },
+    yaxis3: { ...ay, domain: [0.72, 1], tickprefix: "$", rangemode: "tozero", title: { text: "price $/MWh" } },
+    yaxis2: { ...ay, domain: [0.30, 0.66], title: { text: `energy ${units}` } },
+    yaxis: { ...ay, domain: [0, 0.24], rangemode: "tozero", title: { text: `reserve ${units}` } },
+    annotations: [["Price", 1], ["Energy: sold above zero, bought below", 0.66], ["Reserves held (paid to stand by)", 0.24]].map(([t, y]) => ({
+      text: t, xref: "paper", yref: "paper", x: 0, y, xanchor: "left", yanchor: "bottom", showarrow: false, font: { size: 11, color: css("--text-muted") } })),
+  }), cfg);
+}
+
+function dayOrWeek() { return S.dayMode === "week" ? weekView() : dayView(); }
+
+async function dayView() {
+  const b = bess(S.bess), day = $("#dayPick").value; if (!b || !day) return;
+  $("#dayTitle").textContent = `Half-hour by half-hour: ${prettyDate(day)}`;
+  $("#daySub").textContent = "Midnight to midnight. Hover any half-hour for its breakdown and the day's totals.";
+  const rows = (await tpMonth(day.slice(0, 7))).filter((r) => r.bess === b.id && r.date === day).sort((a, x) => a.tp - x.tp);
+  const tip = $("#dayTip"); tip.hidden = true;
+  if (!rows.length) { $("#daySummary").innerHTML = `<span>No data for ${b.name} on ${prettyDate(day)}.</span>`; Plotly.purge("dayChart"); return; }
+  const dr = D.daily.find((r) => r.bess === b.id && r.date === day), T = sum(dr ? [dr] : []);
+  $("#daySummary").innerHTML = [["Day total", fmt$(T.total_rev)], ["Arbitrage", fmt$(T.arbitrage_rev)], ["Reserves", fmt$(T.reserve_rev)],
+    ["Sold", `${fmtN(T.discharge_mwh)} MWh @ $${fmtN(T.sell)}`], ["Bought", `${fmtN(T.charge_mwh)} MWh @ $${fmtN(T.buy)}`]].map(([k, v]) => `<span>${k} <b>${v}</b></span>`).join("");
+  const c = colorOf(b.id), x = rows.map((r) => tpTime(r.tp)), g = (f) => rows.map((r) => r[f]);
+  threePanel(x, g("price"), g("discharge_mw"), g("charge_mw"), g("fir_mw"), g("sir_mw"), c, "MW", true);
+  const el = document.getElementById("dayChart");
+  el.removeAllListeners?.("plotly_hover"); el.removeAllListeners?.("plotly_unhover");
+  el.on("plotly_hover", (ev) => {
+    const r = rows[ev.points[0].pointIndex];
+    const il = r.fir_il_mw || r.sir_il_mw ? tipLine("", "&nbsp;&nbsp;of which while charging", `${fmtN(r.fir_il_mw, 1)} / ${fmtN(r.sir_il_mw, 1)} MW`) : "";
+    tip.innerHTML = `<h4>${tpTime(r.tp)}–${tpTime(r.tp + 1)} <span class="muted">· ${prettyDate(day)}</span></h4><div class="lbl">This half-hour</div>
+      ${tipLine(css("--price"), "Node price", `$${fmtN(r.price, 2)}/MWh`)}
+      ${tipLine(c, "Sold (discharge)", `${fmtN(r.discharge_mw, 1)} MW · ${fmtN(r.discharge_mw / 2, 1)} MWh`)}
+      ${tipLine(tint(c, 0.4), "Bought (charge)", `${fmtN(r.charge_mw, 1)} MW · ${fmtN(r.charge_mw / 2, 1)} MWh`)}
+      ${tipLine(css("--fir"), "FIR held", `${fmtN(r.fir_mw, 1)} MW @ $${fmtN(r.fir_price, 2)}`)}
+      ${tipLine(css("--sir"), "SIR held", `${fmtN(r.sir_mw, 1)} MW @ $${fmtN(r.sir_price, 2)}`)}${il}
+      ${tipLine("", "Arbitrage", fmt$(r.arbitrage_rev))}${tipLine("", "Reserves", fmt$(r.fir_rev + r.sir_rev))}
+      <hr><div class="lbl">Whole day</div>
+      ${tipLine("", "Sold / bought", `${fmtN(T.discharge_mwh)} / ${fmtN(T.charge_mwh)} MWh`)}
+      ${tipLine("", "Arbitrage", fmt$(T.arbitrage_rev))}${tipLine("", "Reserves (FIR / SIR)", `${fmt$(T.reserve_rev)} (${fmt$(T.fir_rev)} / ${fmt$(T.sir_rev)})`)}
+      ${tipLine("", "<b>Total revenue</b>", `<b>${fmt$(T.total_rev)}</b>`)}`;
+    placeTip(ev);
+  });
+  el.on("plotly_unhover", () => (tip.hidden = true));
 }
 
 function weekView() {
-  const id = $("#detailBess").value, pick = $("#dayPick").value;
-  if (!id || !pick) return;
-  const mon = periodKey(pick, "week");
-  const days = [...Array(7)].map((_, i) => { const d = new Date(mon + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + i); return d.toISOString().slice(0, 10); });
-  const by = Object.fromEntries(D.daily.filter((r) => r.bess === id && days.includes(r.date)).map((r) => [r.date, r]));
-  const rows = days.map((d) => by[d] || null);
-  const b = D.bess.find((x) => x.id === id), c = colorOf(id);
-  $("#dayTitle").textContent = `Week view: daily totals, week of ${mon}`;
-  $("#daySub").textContent = "Average node price (top) and daily MWh (bottom). Discharge is above zero and charging below it; lines show reserve held (MW × hours). Hover a day for its breakdown and the week's totals.";
-  const W = totals(rows.filter(Boolean));
-  if (!rows.some(Boolean)) { $("#daySummary").innerHTML = `<span>No data for ${b.name} in the week of ${mon}.</span>`; Plotly.purge("dayChart"); return; }
-  $("#daySummary").innerHTML = [["Week total", fmt$(W.tot)], ["Arbitrage", fmt$(W.arb)], ["Reserves", fmt$(W.res)],
-    ["Discharged", `${fmtN(W.dis)} MWh @ $${fmtN(W.sell)}`], ["Charged", `${fmtN(W.chg)} MWh @ $${fmtN(W.buy)}`]]
-    .map(([k, v]) => `<span>${k} <b>${v}</b></span>`).join("");
-  const x = days.map((d, i) => `${DOW[i]} ${d.slice(8)}/${d.slice(5, 7)}`), v = (f, s = 1) => rows.map((r) => (r ? s * (r[f] || 0) : null));
-  const ax = layout().xaxis, ay = layout().yaxis;
-  const traces = [
-    { type: "scatter", mode: "lines+markers", name: "Node price (avg)", x, y: v("node_price_avg"), line: { color: css("--text-secondary"), width: 2 }, marker: { size: 8 }, yaxis: "y2" },
-    { type: "bar", name: "Discharge", x, y: v("discharge_mwh"), marker: { color: c } },
-    { type: "bar", name: "Charge", x, y: v("charge_mwh", -1), marker: { color: tint(c, 0.45) } },
-    { type: "scatter", mode: "lines+markers", name: "FIR held", x, y: v("fir_mwh"), line: { color: css("--s2"), width: 2 }, marker: { size: 8 } },
-    { type: "scatter", mode: "lines+markers", name: "SIR held", x, y: v("sir_mwh"), line: { color: css("--s3"), width: 2, dash: "dot" }, marker: { size: 8 } },
-  ].map((t) => ({ ...t, hoverinfo: "none" }));
-  Plotly.react("dayChart", traces, layout({
-    barmode: "relative", hovermode: "x", margin: { l: 64, r: 16, t: 10, b: 40 }, legend: { orientation: "h", y: -0.1, x: 0 }, bargap: 0.35,
-    xaxis: { ...ax, type: "category" }, yaxis: { ...ay, domain: [0, 0.62], title: { text: "MWh" } },
-    yaxis2: { ...ay, domain: [0.7, 1], title: { text: "$/MWh" }, tickprefix: "$", rangemode: "tozero" },
-  }), cfg);
-  const el = document.getElementById("dayChart"), tip = $("#dayTip");
-  el.removeAllListeners?.("plotly_hover"); el.removeAllListeners?.("plotly_unhover");
+  const b = bess(S.bess), pick = $("#dayPick").value; if (!b || !pick) return;
+  const mon = weekOf(pick), days = [...Array(7)].map((_, i) => addDays(mon, i));
+  $("#dayTitle").textContent = `Day by day: week of ${prettyDate(mon)}`;
+  $("#daySub").textContent = "Daily totals, Monday to Sunday. Hover a day for its breakdown and the week's totals.";
+  const by = Object.fromEntries(D.daily.filter((r) => r.bess === b.id && days.includes(r.date)).map((r) => [r.date, r]));
+  const rows = days.map((d) => by[d] || null), W = sum(rows.filter(Boolean)), tip = $("#dayTip"); tip.hidden = true;
+  if (!rows.some(Boolean)) { $("#daySummary").innerHTML = `<span>No data for ${b.name} in the week of ${prettyDate(mon)}.</span>`; Plotly.purge("dayChart"); return; }
+  $("#daySummary").innerHTML = [["Week total", fmt$(W.total_rev)], ["Arbitrage", fmt$(W.arbitrage_rev)], ["Reserves", fmt$(W.reserve_rev)],
+    ["Sold", `${fmtN(W.discharge_mwh)} MWh @ $${fmtN(W.sell)}`], ["Bought", `${fmtN(W.charge_mwh)} MWh @ $${fmtN(W.buy)}`]].map(([k, v]) => `<span>${k} <b>${v}</b></span>`).join("");
+  const c = colorOf(b.id), x = days.map((d, i) => `${DOW[i]} ${+d.slice(8)} ${MON[+d.slice(5, 7) - 1]}`), g = (f) => rows.map((r) => (r ? r[f] : null));
+  threePanel(x, g("node_price_avg"), g("discharge_mwh"), g("charge_mwh"), g("fir_mwh"), g("sir_mwh"), c, "MWh", false);
+  const el = document.getElementById("dayChart");
+  el.removeAllListeners?.("plotly_hover"); el.removeAllListeners?.("plotly_unhover"); el.removeAllListeners?.("plotly_click");
   el.on("plotly_hover", (ev) => {
-    const i = ev.points[0].pointIndex, r = rows[i];
-    if (!r) { tip.hidden = true; return; }
-    const d = totals([r]);
-    tip.innerHTML = `<h4>${DOW[i]} ${days[i]}</h4><div class="lbl">This day</div>
-      ${tipLine(c, "Discharged", `${fmtN(d.dis, 1)} MWh @ $${fmtN(d.sell)}`)}
-      ${tipLine(tint(c, 0.45), "Charged", `${fmtN(d.chg, 1)} MWh @ $${fmtN(d.buy)}`)}
-      ${tipLine(css("--s2"), "FIR held", `${fmtN(d.firMwh)} MWh`)}
-      ${tipLine(css("--s3"), "SIR held", `${fmtN(d.sirMwh)} MWh`)}
-      ${tipLine(css("--text-secondary"), "Node price (avg)", `$${fmtN(r.node_price_avg, 2)}/MWh`)}
-      ${tipLine("", "Arbitrage", fmt$(d.arb))}
-      ${tipLine("", "Reserves (FIR / SIR)", `${fmt$(d.res)} (${fmt$(d.fir)} / ${fmt$(d.sir)})`)}
-      ${tipLine("", "<b>Total</b>", `<b>${fmt$(d.tot)}</b>`)}
+    const i = ev.points[0].pointIndex, r = rows[i]; if (!r) { tip.hidden = true; return; }
+    const d = sum([r]);
+    tip.innerHTML = `<h4>${DOW[i]} ${prettyDate(days[i])}</h4><div class="lbl">This day</div>
+      ${tipLine(css("--price"), "Node price avg / peak", `$${fmtN(r.node_price_avg)} / $${fmtN(r.node_price_max)}`)}
+      ${tipLine(c, "Sold (discharge)", `${fmtN(d.discharge_mwh, 1)} MWh @ $${fmtN(d.sell)}`)}
+      ${tipLine(tint(c, 0.4), "Bought (charge)", `${fmtN(d.charge_mwh, 1)} MWh @ $${fmtN(d.buy)}`)}
+      ${tipLine(css("--fir"), "FIR held", `${fmtN(d.fir_mwh)} MWh`)}${tipLine(css("--sir"), "SIR held", `${fmtN(d.sir_mwh)} MWh`)}
+      ${tipLine("", "Arbitrage", fmt$(d.arbitrage_rev))}${tipLine("", "Reserves (FIR / SIR)", `${fmt$(d.reserve_rev)} (${fmt$(d.fir_rev)} / ${fmt$(d.sir_rev)})`)}
+      ${tipLine("", "<b>Day total</b>", `<b>${fmt$(d.total_rev)}</b>`)}
       <hr><div class="lbl">Whole week</div>
-      ${tipLine("", "Discharged / charged", `${fmtN(W.dis)} / ${fmtN(W.chg)} MWh`)}
-      ${tipLine("", "Arbitrage", fmt$(W.arb))}
-      ${tipLine("", "Reserves (FIR / SIR)", `${fmt$(W.res)} (${fmt$(W.fir)} / ${fmt$(W.sir)})`)}
-      ${tipLine("", "<b>Total revenue</b>", `<b>${fmt$(W.tot)}</b>`)}`;
+      ${tipLine("", "Sold / bought", `${fmtN(W.discharge_mwh)} / ${fmtN(W.charge_mwh)} MWh`)}
+      ${tipLine("", "Arbitrage", fmt$(W.arbitrage_rev))}${tipLine("", "Reserves (FIR / SIR)", `${fmt$(W.reserve_rev)} (${fmt$(W.fir_rev)} / ${fmt$(W.sir_rev)})`)}
+      ${tipLine("", "<b>Week total</b>", `<b>${fmt$(W.total_rev)}</b>`)}<div class="muted" style="margin-top:4px">Click to open this day</div>`;
     placeTip(ev);
   });
-  el.on("plotly_unhover", () => { tip.hidden = true; });
+  el.on("plotly_unhover", () => (tip.hidden = true));
+  el.on("plotly_click", (ev) => { const d = days[ev.points[0].pointIndex]; if (by[d]) { $("#dayPick").value = d; setDayMode("day"); } });
 }
 
-function dayOrWeek() { return state.dayMode === "week" ? weekView() : dayView(); }
-
-async function dayView() {
-  const id = $("#detailBess").value, day = $("#dayPick").value;
-  if (!id || !day) return;
-  $("#dayTitle").textContent = "Day view: half-hourly dispatch, midnight to midnight";
-  $("#daySub").textContent = "Node price (top) and MW cleared (bottom). Discharge is above zero and charging below it; lines show FIR and SIR reserve held. Hover any half-hour for the breakdown and the day's totals.";
-  const rows = (await tpMonth(day.slice(0, 7))).filter((r) => r.bess === id && r.date === day).sort((a, b) => a.tp - b.tp);
-  const b = D.bess.find((x) => x.id === id), c = colorOf(id);
-  if (!rows.length) {
-    $("#daySummary").innerHTML = `<span>No half-hourly data for ${b.name} on ${day}.</span>`;
-    Plotly.purge("dayChart"); return;
-  }
-  const sum = (f) => rows.reduce((a, r) => a + (r[f] || 0), 0);
-  const T = { dis: sum("discharge_mw") / 2, chg: sum("charge_mw") / 2, arb: sum("arbitrage_rev"), fir: sum("fir_rev"), sir: sum("sir_rev"),
-    firMwh: sum("fir_mw") / 2, sirMwh: sum("sir_mw") / 2 };
-  T.res = T.fir + T.sir; T.tot = T.arb + T.res;
-  T.sell = T.dis ? rows.reduce((a, r) => a + r.discharge_mw * r.price, 0) / 2 / T.dis : NaN;
-  T.buy = T.chg ? rows.reduce((a, r) => a + r.charge_mw * r.price, 0) / 2 / T.chg : NaN;
-  $("#daySummary").innerHTML = [
-    ["Total", fmt$(T.tot)], ["Arbitrage", fmt$(T.arb)], ["Reserves", fmt$(T.res)],
-    ["Discharged", `${fmtN(T.dis)} MWh @ $${fmtN(T.sell)}`], ["Charged", `${fmtN(T.chg)} MWh @ $${fmtN(T.buy)}`],
-  ].map(([k, v]) => `<span>${k} <b>${v}</b></span>`).join("");
-
-  const x = rows.map((r) => tpTime(r.tp)), ax = layout().xaxis, ay = layout().yaxis;
-  const traces = [
-    { type: "scatter", mode: "lines", name: "Node price", x, y: rows.map((r) => r.price), line: { color: css("--text-secondary"), width: 2, shape: "hv" }, yaxis: "y2" },
-    { type: "bar", name: "Discharge", x, y: rows.map((r) => r.discharge_mw), marker: { color: c } },
-    { type: "bar", name: "Charge", x, y: rows.map((r) => -r.charge_mw), marker: { color: tint(c, 0.45) } },
-    { type: "scatter", mode: "lines", name: "FIR held", x, y: rows.map((r) => r.fir_mw), line: { color: css("--s2"), width: 2, shape: "hv" } },
-    { type: "scatter", mode: "lines", name: "SIR held", x, y: rows.map((r) => r.sir_mw), line: { color: css("--s3"), width: 2, shape: "hv", dash: "dot" } },
-  ].map((t) => ({ ...t, hoverinfo: "none" }));
-  Plotly.react("dayChart", traces, layout({
-    barmode: "relative", hovermode: "x", showlegend: true, margin: { l: 64, r: 16, t: 10, b: 40 },
-    legend: { orientation: "h", y: -0.1, x: 0 },
-    xaxis: { ...ax, type: "category", tickangle: 0, nticks: 13, showspikes: true, spikemode: "across", spikethickness: 1, spikedash: "solid", spikecolor: css("--neutral") },
-    yaxis: { ...ay, domain: [0, 0.62], title: { text: "MW" } },
-    yaxis2: { ...ay, domain: [0.7, 1], title: { text: "$/MWh" }, tickprefix: "$", rangemode: "tozero" },
-  }), cfg);
-
-  const el = document.getElementById("dayChart"), tip = $("#dayTip");
-  el.removeAllListeners?.("plotly_hover"); el.removeAllListeners?.("plotly_unhover");
-  el.on("plotly_hover", (ev) => {
-    const i = ev.points[0].pointIndex, r = rows[i];
-    const line = (sw, k, v) => `<div class="row"><span>${sw ? `<i class="sw" style="background:${sw}"></i>` : ""}${k}</span><span>${v}</span></div>`;
-    const il = (r.fir_il_mw || r.sir_il_mw) ? line("", "&nbsp;&nbsp;of which interruptible load", `${fmtN(r.fir_il_mw, 1)} / ${fmtN(r.sir_il_mw, 1)} MW`) : "";
-    tip.innerHTML = `<h4>${day} · ${tpTime(r.tp)}–${tpTime(r.tp + 1)} <span class="muted">TP ${r.tp}</span></h4>
-      <div class="lbl">This half-hour</div>
-      ${line(c, "Discharge", `${fmtN(r.discharge_mw, 1)} MW · ${fmtN(r.discharge_mw / 2, 1)} MWh`)}
-      ${line(tint(c, 0.45), "Charge", `${fmtN(r.charge_mw, 1)} MW · ${fmtN(r.charge_mw / 2, 1)} MWh`)}
-      ${line(css("--s2"), "FIR held", `${fmtN(r.fir_mw, 1)} MW @ $${fmtN(r.fir_price, 2)}`)}
-      ${line(css("--s3"), "SIR held", `${fmtN(r.sir_mw, 1)} MW @ $${fmtN(r.sir_price, 2)}`)}${il}
-      ${line(css("--text-secondary"), "Node price", `$${fmtN(r.price, 2)}/MWh`)}
-      ${line("", "Arbitrage", fmt$(r.arbitrage_rev))}
-      ${line("", "Reserves", fmt$(r.fir_rev + r.sir_rev))}
-      <hr><div class="lbl">Whole day</div>
-      ${line("", "Discharged / charged", `${fmtN(T.dis)} / ${fmtN(T.chg)} MWh`)}
-      ${line("", "Reserve held (FIR / SIR)", `${fmtN(T.firMwh)} / ${fmtN(T.sirMwh)} MWh`)}
-      ${line("", "Arbitrage", fmt$(T.arb))}
-      ${line("", "Reserves (FIR / SIR)", `${fmt$(T.res)} (${fmt$(T.fir)} / ${fmt$(T.sir)})`)}
-      ${line("", "<b>Total revenue</b>", `<b>${fmt$(T.tot)}</b>`)}`;
-    placeTip(ev);
-  });
-  el.on("plotly_unhover", () => { tip.hidden = true; });
+function setDayMode(m) {
+  S.dayMode = m;
+  $("#dayMode").querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", x.dataset.m === m));
+  dayOrWeek();
 }
 
-function displacement() {
-  let rows = D.disp.filter((r) => r.date >= state.from && r.date <= state.to);
-  if (state.tight === "tight") rows = rows.filter((r) => r.tight);
-  const keys = [...new Set(rows.map((r) => periodKey(r.date, state.gran)))].sort();
-  const m = aggregate(rows, (r) => periodKey(r.date, state.gran));
-  const F = [["disp_gas_mwh", "Gas", "--s2"], ["disp_coal/gas_mwh", "Huntly coal/gas", "--s8"], ["disp_diesel_mwh", "Diesel", "--s4"],
-    ["disp_hydro_mwh", "Hydro", "--s1"], ["disp_geothermal_mwh", "Geothermal", "--s3"], ["disp_other_mwh", "Other / wind / solar", "--neutral"]];
-  const traces = F.map(([f, n, c]) => ({ type: "bar", name: n, x: keys.map(periodLabel), y: keys.map((k) => m.get(k)?.[f] || 0),
-    marker: { color: css(c), line: { color: css("--surface-1"), width: 1 } }, hovertemplate: "%{y:,.0f} MWh<extra>" + n + "</extra>" }));
-  traces.push({ type: "bar", name: "Shortfall (stack exhausted)", x: keys.map(periodLabel),
-    y: keys.map((k) => { const a = m.get(k); if (!a) return 0; const s = F.reduce((t, [f]) => t + (a[f] || 0), 0) + (a["disp_wind_mwh"] || 0) + (a["disp_solar_mwh"] || 0); return Math.max(a.bess_mwh - s, 0); }),
-    marker: { color: css("--surface-1"), line: { color: css("--text-muted"), width: 1 }, pattern: { shape: "/", fgcolor: css("--text-muted") } } });
-  Plotly.react("dispChart", traces, layout({ barmode: "stack", xaxis: pAxis(), yaxis: { ...layout().yaxis, title: { text: "MWh" } } }), cfg);
-
-  const t = D.tight.filter((r) => r.date >= state.from && r.date <= state.to).slice(0, 40);
-  const H = ["Date", "TP", "Island", "BESS MW", "Ref price", "Headroom MW", "Gas MW", "Coal/gas MW", "Shortfall MW", "Next units in stack", "Counterfactual $/MWh"];
-  $("#tightTable").innerHTML = `<thead><tr>${H.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>` + t.map((r) =>
-    `<tr><td>${r.date}</td><td>${r.tp}</td><td>${r.island}</td><td>${fmtN(r.bess_mw)}</td><td>$${fmtN(r.ref_price)}</td><td>${fmtN(r.headroom_mw)}</td>
-     <td>${fmtN(r.disp_gas_mw)}</td><td>${fmtN(r["disp_coal/gas_mw"])}</td><td>${fmtN(r.unmet_mw)}</td><td style="text-align:left">${r.displaced_units || ""}</td>
-     <td>${r.unmet_mw > 1 ? "scarcity" : "$" + fmtN(r.cf_price)}</td></tr>`).join("") + "</tbody>";
+// ---------- navigation ----------
+function setTab(t) {
+  S.tab = t;
+  document.querySelectorAll(".tabs button").forEach((b) => b.setAttribute("aria-selected", b.dataset.tab === t));
+  ["overview", "battery", "notes"].forEach((x) => ($(`#tab-${x}`).hidden = x !== t));
+  if (t === "overview") overview(); else if (t === "battery") battery();
+  window.dispatchEvent(new Event("resize"));
 }
-
-function render() {
-  const rows = filtered();
-  tiles(rows); revChart(rows); summaryTable(rows); detail(); dayOrWeek(); displacement();
+function openDay(id, date) {
+  S.bess = id; $("#bSel").value = id;
+  if (date) { $("#dayPick").value = date; S.dayMode = "day"; $("#dayMode").querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", x.dataset.m === "day")); }
+  setTab("battery");
+  if (date) setTimeout(() => $("#dayCard").scrollIntoView({ behavior: "smooth", block: "start" }), 50);
 }
+const segClick = (id, fn) => $(id).addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  $(id).querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", x === b)); fn(b.dataset);
+});
 
-function initControls() {
-  const dates = D.daily.map((r) => r.date).sort();
-  const first = dates[0], last = dates[dates.length - 1];
-  state.from = first; state.to = last;
-  $("#from").value = first; $("#to").value = last;
-  $("#from").min = $("#to").min = first; $("#from").max = $("#to").max = last;
-  $("#coverage").textContent = `Trading dates ${first} to ${last} · updated ${D.meta.generated_utc.replace("T", " ")} UTC`;
+function init() {
+  const dates = D.daily.map((r) => r.date).sort(), first = dates[0], last = dates[dates.length - 1];
+  D.first = first; D.last = last;
+  S.from = first; S.to = last;
+  $("#coverage").textContent = `Data ${prettyDate(first)} – ${prettyDate(last)} · updated ${D.meta.generated_utc.replace("T", " ")} UTC`;
+  ["#from", "#to", "#dayPick"].forEach((s) => { $(s).min = first; $(s).max = last; });
+  $("#from").value = first; $("#to").value = last; $("#dayPick").value = last;
 
   const withData = new Set(D.daily.filter((r) => r.discharge_mwh > 0 || r.reserve_rev > 0).map((r) => r.bess));
-  D.bess.forEach((b) => withData.has(b.id) && state.sel.add(b.id));
-  $("#bessChips").innerHTML = D.bess.map((b) => `<label class="chip"><input type="checkbox" value="${b.id}" ${state.sel.has(b.id) ? "checked" : ""}>
-     <span class="sw" style="background:${colorOf(b.id)}"></span>${b.name}</label>`).join("");
-  $("#bessChips").addEventListener("change", (e) => { e.target.checked ? state.sel.add(e.target.value) : state.sel.delete(e.target.value); render(); });
+  D.bess = D.bess.filter((b) => withData.has(b.id));
+  D.start = {};
+  D.daily.forEach((r) => { if ((r.discharge_mwh > 0 || r.charge_mwh > 0 || r.reserve_rev > 0) && (!D.start[r.bess] || r.date < D.start[r.bess])) D.start[r.bess] = r.date; });
+  D.bess.forEach((b) => S.sel.add(b.id));
+  S.bess = D.bess[0]?.id;
+  $("#bessChips").innerHTML = D.bess.map((b) => `<label class="chip"><input type="checkbox" value="${b.id}" checked>${swatch(b.id)}${b.name}</label>`).join("");
+  $("#bessChips").addEventListener("change", (e) => { e.target.checked ? S.sel.add(e.target.value) : S.sel.delete(e.target.value); overview(); });
+  $("#bSel").innerHTML = D.bess.map((b) => `<option value="${b.id}">${b.name}</option>`).join("");
+  $("#bSel").onchange = (e) => { S.bess = e.target.value; battery(); };
 
-  $("#detailBess").innerHTML = D.bess.filter((b) => withData.has(b.id)).map((b) => `<option value="${b.id}">${b.name}</option>`).join("");
-  $("#detailBess").onchange = () => { detail(); dayOrWeek(); };
-  $("#dayPick").min = first; $("#dayPick").max = last; $("#dayPick").value = last;
-  const shiftDay = (n) => { const d = new Date($("#dayPick").value + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n);
-    const v = d.toISOString().slice(0, 10); const c2 = v < first ? first : v > last ? last : v; if (c2 !== $("#dayPick").value) { $("#dayPick").value = c2; dayOrWeek(); } };
-  const step = () => (state.dayMode === "week" ? 7 : 1);
-  $("#dayPrev").onclick = () => shiftDay(-step()); $("#dayNext").onclick = () => shiftDay(step());
+  document.querySelector(".tabs").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) setTab(b.dataset.tab); });
+  const setRange = (f, t) => { S.from = f < first ? first : f; S.to = t; $("#from").value = S.from; $("#to").value = S.to; overview(); };
+  $("#from").onchange = (e) => { S.from = e.target.value; $("#quick").querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", false)); overview(); };
+  $("#to").onchange = (e) => { S.to = e.target.value; $("#quick").querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", false)); overview(); };
+  segClick("#quick", (d) => setRange(d.q === "ytd" ? `${last.slice(0, 4)}-01-01` : addDays(last, -(+d.q - 1)), last));
+  segClick("#perGran", (d) => { S.gran = d.g; perChart(D.daily.filter((r) => S.sel.has(r.bess) && inRange(r))); });
+  segClick("#perSplit", (d) => { S.split = d.s; perChart(D.daily.filter((r) => S.sel.has(r.bess) && inRange(r))); });
+  segClick("#hourMode", (d) => { S.hour = d.h; hourChart(); });
+  segClick("#dayMode", (d) => setDayMode(d.m));
+  ["#topArb", "#topRes", "#cmpTable"].forEach((s) => $(s).addEventListener("click", (e) => { const tr = e.target.closest("tr.click"); if (tr) openDay(tr.dataset.b, tr.dataset.d); }));
+  const shift = (n) => { const step = S.dayMode === "week" ? 7 : 1; let v = addDays($("#dayPick").value, n * step); v = v < first ? first : v > last ? last : v; $("#dayPick").value = v; dayOrWeek(); };
+  $("#dayPrev").onclick = () => shift(-1); $("#dayNext").onclick = () => shift(1);
   $("#dayPick").onchange = dayOrWeek;
-  $("#dayMode").addEventListener("click", (e) => {
-    const b = e.target.closest("button"); if (!b) return;
-    $("#dayMode").querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", x === b));
-    state.dayMode = b.dataset.m; $("#dayTip").hidden = true; dayOrWeek();
-  });
 
-  const seg = (sel, attr, key) => $(sel).addEventListener("click", (e) => {
-    const b = e.target.closest("button"); if (!b) return;
-    $(sel).querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", x === b));
-    state[key] = b.dataset[attr]; render();
-  });
-  seg("#gran", "g", "gran"); seg("#revSplit", "s", "split"); seg("#tightSel", "t", "tight");
-  $("#from").onchange = (e) => { state.from = e.target.value; render(); };
-  $("#to").onchange = (e) => { state.to = e.target.value; render(); };
-
-  const t = D.meta.settings.tight_market;
-  $("#tPrice").textContent = t.price_threshold; $("#tHead").textContent = t.headroom_threshold_mw; $("#tCap").textContent = t.headroom_price_cap;
-  $("#nWarn").textContent = D.meta.warnings.length;
-  $("#warnList").innerHTML = D.meta.warnings.map((w) => `<li>${w}</li>`).join("");
+  $("#nWarn").textContent = (D.meta.warnings || []).length;
+  $("#warnList").innerHTML = (D.meta.warnings || []).map((w) => `<li>${w}</li>`).join("");
 }
 
 (async () => {
   const get = (f) => fetch(`data/${f}?v=${Date.now()}`).then((r) => r.json());
-  [D.bess, D.daily, D.disp, D.tight, D.meta] = await Promise.all(
-    ["bess.json", "daily.json", "displacement_daily.json", "tight_periods.json", "meta.json"].map(get));
-  if (!D.daily.length) { $("#coverage").textContent = "No data yet - the first nightly run hasn't completed."; return; }
-  initControls(); render();
-  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);
+  [D.bess, D.daily, D.hourly, D.meta] = await Promise.all(["bess.json", "daily.json", "hourly.json", "meta.json"].map(get));
+  if (!D.daily.length) { $("#coverage").textContent = "No data yet: the first nightly run hasn't completed."; return; }
+  init(); setTab("overview");
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => setTab(S.tab));
 })();

@@ -4,8 +4,9 @@ This dashboard shows how New Zealand's grid-scale batteries are dispatched and w
 
 - **Revenue** per battery and in total: energy arbitrage plus FIR and SIR reserves, viewable by day, week, month or year
 - **Volumes and prices**: MWh charged and discharged, average buy and sell prices, spread, cycles and round-trip efficiency
-- **How each battery is run**: a day view of all 48 half-hours (price, charge, discharge, reserves) with a hover breakdown
-- **What the batteries displace**: the plant (gas, Huntly coal/gas, hydro and so on) that would have cleared next in the island's offer stack, with a separate view of tight periods
+- **When they make money**: a daily revenue calendar, revenue by hour of day, and the best 10 days for arbitrage and for reserves
+- **How each battery is run**: a Day view (48 half-hours: price, energy bought and sold, reserves held) and a Week view (daily totals), both with hover breakdowns
+- **Phase 2 (parked)**: what the batteries push out of the merit order. The code is in `pipeline/displacement.py`, but it is switched off (`run_displacement: false`) because a reliable answer needs a constraint-aware market re-run (vSPD).
 
 ## How it works
 
@@ -13,7 +14,7 @@ This dashboard shows how New Zealand's grid-scale batteries are dispatched and w
 GitHub Actions (02:30 NZT nightly)
    └─ pipeline/build.py   downloads yesterday's EMI files, re-does the last 4 days (interim → final prices)
         ├─ pipeline/bess.py          discharge / charge / reserves / revenue per battery per half-hour
-        └─ pipeline/displacement.py  merit-order shift on the offer stack
+        └─ pipeline/displacement.py  (phase 2, off) merit-order shift on the offer stack
    └─ commits data/processed/ (half-hourly history) and docs/data/ (dashboard JSON)
 GitHub Pages serves docs/ → the dashboard
 ```
@@ -58,7 +59,7 @@ EMI_LOCAL_DIR=tests/fixtures BESS_CONFIG=tests/bess_test.yaml python -m pipeline
 
 - **Gross spot value, not profit.** Hedges, frequency keeping, constrained-on payments, transmission and reserve cost allocation, and losses are excluded.
 - **Charging.** Each battery has an injection unit and an offtake unit in EMI (e.g. Ruakākā RUK0/RUK99), and charging is the dispatched load on the offtake unit. The EA's decision moves batteries to a single bid/offer form from 31 March 2028; when that happens the unit mapping will need updating.
-- **Displacement is indicative.** It is a merit-order shift that ignores transmission constraints, the HVDC link, energy/reserve co-optimisation, ramping and unit commitment.
+- **Displacement is parked.** A merit-order shift ignores transmission constraints, the HVDC link, energy/reserve co-optimisation and unit commitment, so it isn't shown. To rebuild the dashboard files from saved data without downloading anything, run `python -m pipeline.build --publish-only`, or start the nightly workflow with *publish_only* ticked.
 
 ## Next iteration ideas
 

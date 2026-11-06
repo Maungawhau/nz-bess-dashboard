@@ -13,6 +13,10 @@ on:
       to:
         description: "Re-process to (YYYY-MM-DD, optional)"
         required: false
+      publish_only:
+        description: "Only rebuild the dashboard files from saved data (no EMI downloads)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -37,6 +41,7 @@ jobs:
           ARGS=""
           if [ -n "${{ inputs.from }}" ]; then ARGS="$ARGS --from ${{ inputs.from }}"; fi
           if [ -n "${{ inputs.to }}" ]; then ARGS="$ARGS --to ${{ inputs.to }}"; fi
+          if [ "${{ inputs.publish_only }}" = "true" ]; then ARGS="--publish-only"; fi
           python -m pipeline.build $ARGS
       - name: Commit updated data
         # Outputs only: put this run's data on top of the latest main, so code pushed while the

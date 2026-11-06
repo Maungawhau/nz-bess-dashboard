@@ -187,6 +187,7 @@ def daily_rollup(tp: pd.DataFrame, registry: list[dict]) -> pd.DataFrame:
     out["sir_mwh"] = g["sir_mw"].sum() * TP_HOURS
     out["ref_price_avg"] = g["ref_price"].mean()
     out["node_price_avg"] = g["price"].mean()
+    out["node_price_max"] = g["price"].max()
     out["max_discharge_mw"] = g["discharge_mw"].max()
     out["tps_discharging"] = g["discharge_mw"].apply(lambda v: int((v > 0.5).sum()))
     out["tps_charging"] = g["charge_mw"].apply(lambda v: int((v > 0.5).sum()))

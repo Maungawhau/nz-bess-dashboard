@@ -96,8 +96,12 @@ def dates_to_run(settings, done: set, start=None, end=None):
     return sorted(set(missing) | recent)
 
 
-def run(start=None, end=None, skip_displacement=False):
+def run(start=None, end=None, skip_displacement=False, publish_only=False):
     settings, registry = load_config()
+    skip_displacement = skip_displacement or not settings.get("run_displacement", False)
+    if publish_only:   # rebuild dashboard files from the saved half-hourly history, no downloads
+        publish(_read_parts("tp"), pd.DataFrame(), registry, settings, [])
+        return
     warnings: list[str] = []
     fleet = load_fleet()
     registry = autodetect(fleet, registry, warnings)
@@ -156,11 +160,15 @@ def publish(tp, disp, registry, settings, warnings):
     os.makedirs(OUT, exist_ok=True)
     daily = B.daily_rollup(tp, registry) if not tp.empty else pd.DataFrame()
 
-    dd = D.daily_rollup(disp) if not disp.empty else pd.DataFrame()
-    top = pd.DataFrame()
-    if not disp.empty:
-        top = disp.sort_values(["tight", "disp_gas_mw"], ascending=False)
-        top = top[top["tight"]].nlargest(60, "bess_mw") if top["tight"].any() else top.nlargest(30, "bess_mw")
+    # revenue by hour of day, per battery per date (compact columnar) - "when in the day is money made"
+    tod = {"cols": ["date", "bess", "hour", "arb", "res"], "rows": []}
+    if not tp.empty:
+        h = tp.assign(hour=((tp["tp"] - 1) // 2).clip(upper=23), res=tp["fir_rev"] + tp["sir_rev"])
+        h = h.groupby(["date", "bess", "hour"])[["arbitrage_rev", "res"]].sum().reset_index()
+        h = h[(h["arbitrage_rev"].abs() > 0.5) | (h["res"].abs() > 0.5)]
+        h["date"] = h["date"].astype(str)
+        h[["arbitrage_rev", "res"]] = h[["arbitrage_rev", "res"]].round(0)
+        tod["rows"] = h[["date", "bess", "hour", "arbitrage_rev", "res"]].values.tolist()
 
     # half-hourly detail for the day view: one compact columnar file per month, loaded on demand
     months = []
@@ -189,8 +197,7 @@ def publish(tp, disp, registry, settings, warnings):
         "warnings": sorted(set(warnings))[-60:],
     }
     files = {"bess.json": reg, "daily.json": _jsonable(daily) if not daily.empty else [],
-             "displacement_daily.json": _jsonable(dd) if not dd.empty else [],
-             "tight_periods.json": _jsonable(top) if not top.empty else [], "meta.json": meta}
+             "hourly.json": tod, "meta.json": meta}
     for n, obj in files.items():
         with open(f"{OUT}/{n}", "w") as f:
             json.dump(obj, f, separators=(",", ":"), default=str)
@@ -202,6 +209,7 @@ if __name__ == "__main__":
     ap.add_argument("--from", dest="start")
     ap.add_argument("--to", dest="end")
     ap.add_argument("--skip-displacement", action="store_true")
+    ap.add_argument("--publish-only", action="store_true")
     a = ap.parse_args()
     run(pd.Timestamp(a.start).date() if a.start else None, pd.Timestamp(a.end).date() if a.end else None,
-        a.skip_displacement)
+        a.skip_displacement, a.publish_only)

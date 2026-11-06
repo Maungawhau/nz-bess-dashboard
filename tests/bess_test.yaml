@@ -18,8 +18,9 @@
 settings:
   start_date: 2026-01-01          # first trading date in the history
   reprocess_days: 4               # re-run the last N days each night (interim -> final prices)
-  max_new_days_per_run: 45        # back-fill in chunks so one run stays well under GitHub's 6h limit
+  max_new_days_per_run: 400       # ~15 s per day on GitHub runners, so a full year fits in one run
   reference_nodes: {NI: OTA2201, SI: BEN2201}
+  run_displacement: false         # merit-order displacement is parked as phase 2 (needs a constraint-aware model)
   tight_market:
     price_threshold: 300          # $/MWh island reference price at/above which a TP is "tight"
     headroom_threshold_mw: 400    # or: uncleared energy offered below the cap in the island < this
