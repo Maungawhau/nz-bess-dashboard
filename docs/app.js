@@ -2,7 +2,7 @@
 const $ = (s) => document.querySelector(s);
 const css = (v) => getComputedStyle($(".viz-root")).getPropertyValue(v).trim();
 const SLOTS = ["--s1", "--s2", "--s3", "--s4", "--s5", "--s6", "--s7", "--s8"];
-const state = { gran: "month", split: "bess", tight: "all", sel: new Set(), from: null, to: null };
+const state = { dayMode: "day", gran: "month", split: "bess", tight: "all", sel: new Set(), from: null, to: null };
 let D = {};
 
 const fmt$ = (v) => {
@@ -149,9 +149,86 @@ async function tpMonth(m) {
 }
 const tpTime = (tp) => { const m = (tp - 1) * 30; return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`; };
 
+const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+function tipLine(sw, k, v) { return `<div class="row"><span>${sw ? `<i class="sw" style="background:${sw}"></i>` : ""}${k}</span><span>${v}</span></div>`; }
+function placeTip(ev) {
+  const tip = $("#dayTip"), card = $("#dayCard").getBoundingClientRect(), e = ev.event;
+  tip.hidden = false;
+  let left = e.clientX - card.left + 16, top = e.clientY - card.top + 12;
+  if (left + tip.offsetWidth > card.width - 8) left = e.clientX - card.left - tip.offsetWidth - 16;
+  if (top + tip.offsetHeight > card.height - 8) top = Math.max(8, card.height - tip.offsetHeight - 8);
+  tip.style.left = `${left}px`; tip.style.top = `${top}px`;
+}
+function totals(rows) {   // rows of daily.json
+  const S = (f) => rows.reduce((a, r) => a + (r[f] || 0), 0);
+  const T = { dis: S("discharge_mwh"), chg: S("charge_mwh"), arb: S("arbitrage_rev"), fir: S("fir_rev"), sir: S("sir_rev"),
+    firMwh: S("fir_mwh"), sirMwh: S("sir_mwh"), disRev: S("discharge_rev"), chgCost: S("charge_cost") };
+  T.res = T.fir + T.sir; T.tot = T.arb + T.res;
+  T.sell = T.dis ? T.disRev / T.dis : NaN; T.buy = T.chg ? T.chgCost / T.chg : NaN;
+  return T;
+}
+
+function weekView() {
+  const id = $("#detailBess").value, pick = $("#dayPick").value;
+  if (!id || !pick) return;
+  const mon = periodKey(pick, "week");
+  const days = [...Array(7)].map((_, i) => { const d = new Date(mon + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + i); return d.toISOString().slice(0, 10); });
+  const by = Object.fromEntries(D.daily.filter((r) => r.bess === id && days.includes(r.date)).map((r) => [r.date, r]));
+  const rows = days.map((d) => by[d] || null);
+  const b = D.bess.find((x) => x.id === id), c = colorOf(id);
+  $("#dayTitle").textContent = `Week view: daily totals, week of ${mon}`;
+  $("#daySub").textContent = "Average node price (top) and daily MWh (bottom). Discharge is above zero and charging below it; lines show reserve held (MW × hours). Hover a day for its breakdown and the week's totals.";
+  const W = totals(rows.filter(Boolean));
+  if (!rows.some(Boolean)) { $("#daySummary").innerHTML = `<span>No data for ${b.name} in the week of ${mon}.</span>`; Plotly.purge("dayChart"); return; }
+  $("#daySummary").innerHTML = [["Week total", fmt$(W.tot)], ["Arbitrage", fmt$(W.arb)], ["Reserves", fmt$(W.res)],
+    ["Discharged", `${fmtN(W.dis)} MWh @ $${fmtN(W.sell)}`], ["Charged", `${fmtN(W.chg)} MWh @ $${fmtN(W.buy)}`]]
+    .map(([k, v]) => `<span>${k} <b>${v}</b></span>`).join("");
+  const x = days.map((d, i) => `${DOW[i]} ${d.slice(8)}/${d.slice(5, 7)}`), v = (f, s = 1) => rows.map((r) => (r ? s * (r[f] || 0) : null));
+  const ax = layout().xaxis, ay = layout().yaxis;
+  const traces = [
+    { type: "scatter", mode: "lines+markers", name: "Node price (avg)", x, y: v("node_price_avg"), line: { color: css("--text-secondary"), width: 2 }, marker: { size: 8 }, yaxis: "y2" },
+    { type: "bar", name: "Discharge", x, y: v("discharge_mwh"), marker: { color: c } },
+    { type: "bar", name: "Charge", x, y: v("charge_mwh", -1), marker: { color: tint(c, 0.45) } },
+    { type: "scatter", mode: "lines+markers", name: "FIR held", x, y: v("fir_mwh"), line: { color: css("--s2"), width: 2 }, marker: { size: 8 } },
+    { type: "scatter", mode: "lines+markers", name: "SIR held", x, y: v("sir_mwh"), line: { color: css("--s3"), width: 2, dash: "dot" }, marker: { size: 8 } },
+  ].map((t) => ({ ...t, hoverinfo: "none" }));
+  Plotly.react("dayChart", traces, layout({
+    barmode: "relative", hovermode: "x", margin: { l: 64, r: 16, t: 10, b: 40 }, legend: { orientation: "h", y: -0.1, x: 0 }, bargap: 0.35,
+    xaxis: { ...ax, type: "category" }, yaxis: { ...ay, domain: [0, 0.62], title: { text: "MWh" } },
+    yaxis2: { ...ay, domain: [0.7, 1], title: { text: "$/MWh" }, tickprefix: "$", rangemode: "tozero" },
+  }), cfg);
+  const el = document.getElementById("dayChart"), tip = $("#dayTip");
+  el.removeAllListeners?.("plotly_hover"); el.removeAllListeners?.("plotly_unhover");
+  el.on("plotly_hover", (ev) => {
+    const i = ev.points[0].pointIndex, r = rows[i];
+    if (!r) { tip.hidden = true; return; }
+    const d = totals([r]);
+    tip.innerHTML = `<h4>${DOW[i]} ${days[i]}</h4><div class="lbl">This day</div>
+      ${tipLine(c, "Discharged", `${fmtN(d.dis, 1)} MWh @ $${fmtN(d.sell)}`)}
+      ${tipLine(tint(c, 0.45), "Charged", `${fmtN(d.chg, 1)} MWh @ $${fmtN(d.buy)}`)}
+      ${tipLine(css("--s2"), "FIR held", `${fmtN(d.firMwh)} MWh`)}
+      ${tipLine(css("--s3"), "SIR held", `${fmtN(d.sirMwh)} MWh`)}
+      ${tipLine(css("--text-secondary"), "Node price (avg)", `$${fmtN(r.node_price_avg, 2)}/MWh`)}
+      ${tipLine("", "Arbitrage", fmt$(d.arb))}
+      ${tipLine("", "Reserves (FIR / SIR)", `${fmt$(d.res)} (${fmt$(d.fir)} / ${fmt$(d.sir)})`)}
+      ${tipLine("", "<b>Total</b>", `<b>${fmt$(d.tot)}</b>`)}
+      <hr><div class="lbl">Whole week</div>
+      ${tipLine("", "Discharged / charged", `${fmtN(W.dis)} / ${fmtN(W.chg)} MWh`)}
+      ${tipLine("", "Arbitrage", fmt$(W.arb))}
+      ${tipLine("", "Reserves (FIR / SIR)", `${fmt$(W.res)} (${fmt$(W.fir)} / ${fmt$(W.sir)})`)}
+      ${tipLine("", "<b>Total revenue</b>", `<b>${fmt$(W.tot)}</b>`)}`;
+    placeTip(ev);
+  });
+  el.on("plotly_unhover", () => { tip.hidden = true; });
+}
+
+function dayOrWeek() { return state.dayMode === "week" ? weekView() : dayView(); }
+
 async function dayView() {
   const id = $("#detailBess").value, day = $("#dayPick").value;
   if (!id || !day) return;
+  $("#dayTitle").textContent = "Day view: half-hourly dispatch, midnight to midnight";
+  $("#daySub").textContent = "Node price (top) and MW cleared (bottom). Discharge is above zero and charging below it; lines show FIR and SIR reserve held. Hover any half-hour for the breakdown and the day's totals.";
   const rows = (await tpMonth(day.slice(0, 7))).filter((r) => r.bess === id && r.date === day).sort((a, b) => a.tp - b.tp);
   const b = D.bess.find((x) => x.id === id), c = colorOf(id);
   if (!rows.length) {
@@ -206,12 +283,7 @@ async function dayView() {
       ${line("", "Arbitrage", fmt$(T.arb))}
       ${line("", "Reserves (FIR / SIR)", `${fmt$(T.res)} (${fmt$(T.fir)} / ${fmt$(T.sir)})`)}
       ${line("", "<b>Total revenue</b>", `<b>${fmt$(T.tot)}</b>`)}`;
-    tip.hidden = false;
-    const card = $("#dayCard").getBoundingClientRect(), e = ev.event;
-    let left = e.clientX - card.left + 16, top = e.clientY - card.top + 12;
-    if (left + tip.offsetWidth > card.width - 8) left = e.clientX - card.left - tip.offsetWidth - 16;
-    if (top + tip.offsetHeight > card.height - 8) top = Math.max(8, card.height - tip.offsetHeight - 8);
-    tip.style.left = `${left}px`; tip.style.top = `${top}px`;
+    placeTip(ev);
   });
   el.on("plotly_unhover", () => { tip.hidden = true; });
 }
@@ -240,7 +312,7 @@ function displacement() {
 
 function render() {
   const rows = filtered();
-  tiles(rows); revChart(rows); summaryTable(rows); detail(); dayView(); displacement();
+  tiles(rows); revChart(rows); summaryTable(rows); detail(); dayOrWeek(); displacement();
 }
 
 function initControls() {
@@ -258,12 +330,18 @@ function initControls() {
   $("#bessChips").addEventListener("change", (e) => { e.target.checked ? state.sel.add(e.target.value) : state.sel.delete(e.target.value); render(); });
 
   $("#detailBess").innerHTML = D.bess.filter((b) => withData.has(b.id)).map((b) => `<option value="${b.id}">${b.name}</option>`).join("");
-  $("#detailBess").onchange = () => { detail(); dayView(); };
+  $("#detailBess").onchange = () => { detail(); dayOrWeek(); };
   $("#dayPick").min = first; $("#dayPick").max = last; $("#dayPick").value = last;
   const shiftDay = (n) => { const d = new Date($("#dayPick").value + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n);
-    const v = d.toISOString().slice(0, 10); if (v >= first && v <= last) { $("#dayPick").value = v; dayView(); } };
-  $("#dayPrev").onclick = () => shiftDay(-1); $("#dayNext").onclick = () => shiftDay(1);
-  $("#dayPick").onchange = dayView;
+    const v = d.toISOString().slice(0, 10); const c2 = v < first ? first : v > last ? last : v; if (c2 !== $("#dayPick").value) { $("#dayPick").value = c2; dayOrWeek(); } };
+  const step = () => (state.dayMode === "week" ? 7 : 1);
+  $("#dayPrev").onclick = () => shiftDay(-step()); $("#dayNext").onclick = () => shiftDay(step());
+  $("#dayPick").onchange = dayOrWeek;
+  $("#dayMode").addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    $("#dayMode").querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", x === b));
+    state.dayMode = b.dataset.m; $("#dayTip").hidden = true; dayOrWeek();
+  });
 
   const seg = (sel, attr, key) => $(sel).addEventListener("click", (e) => {
     const b = e.target.closest("button"); if (!b) return;

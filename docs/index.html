@@ -115,8 +115,9 @@ summary{cursor:pointer;color:var(--text-secondary)}
   </div>
   <div class="card" id="dayCard" style="position:relative">
     <div class="card-head">
-      <div><h2>Day view: half-hourly dispatch</h2><div class="muted">Node price (top) and MW cleared (bottom). Discharge is above zero and charging below it; lines show FIR and SIR reserve held. Hover any half-hour for the breakdown and the day's totals.</div></div>
-      <div style="display:flex;gap:6px;align-items:center">
+      <div><h2 id="dayTitle">Day view: half-hourly dispatch</h2><div class="muted" id="daySub"></div></div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <div class="seg" id="dayMode"><button data-m="day" aria-pressed="true">Day</button><button data-m="week">Week</button></div>
         <button class="navbtn" id="dayPrev" aria-label="Previous day">‹</button>
         <input type="date" id="dayPick">
         <button class="navbtn" id="dayNext" aria-label="Next day">›</button>
