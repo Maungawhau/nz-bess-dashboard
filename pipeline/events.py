@@ -29,7 +29,7 @@ PAGES = {
     "EXN": "https://www.transpower.co.nz/system-operator/notices-and-reporting/excursion-notices",
 }
 STORE = "data/events/notices.csv"
-PARSER_VERSION = "3"          # bump to re-read every stored notice after a parser change
+PARSER_VERSION = "4"          # bump to re-read every stored notice after a parser change
 MONTHS = {m: i for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], 1)}
 
 # ---------------------------------------------------------------------------
@@ -102,12 +102,17 @@ RX_TIME = re.compile(r"Time:\s*(\d{1,2})\s*-\s*([A-Za-z]{3,9})\s*-\s*(\d{4})\s+(
 RX_SENT = re.compile(r"Sent:\s*(\d{1,2})-([A-Za-z]{3,9})-(\d{4})\s+(\d{1,2}:\d{2})")
 RX_OCCURRED = re.compile(r"occurred.{0,80}?on\s+(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3,9})\s+(\d{4})", re.S)
 RX_REVISION = re.compile(r"Revision of:\s*CAN,?\s*(\d{6,})")
+RX_REF = re.compile(r"Ref:\s*(\d{6,})")
+RX_STARTEND = re.compile(r"Starting:\s*(\d{1,2})-([A-Za-z]{3,9})-(\d{4})\s+(\d{1,2}:\d{2}).{0,40}?Ending:\s*(\d{1,2})-([A-Za-z]{3,9})-(\d{4})\s+(\d{1,2}:\d{2})", re.S)
+RX_UNTIL = re.compile(r"until\s+(\d{1,2}:\d{2})[^,.]{0,20},?\s*(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3,9})\s+(\d{4})")
 
 
 def parse_text(text: str, kind: str) -> dict:
     """Extract sent time, island, windows [(start, end)], superseded ref and cancellation."""
     t = re.sub(r"[ \t\u00a0\u2009\u202f]+", " ", text)
-    info = {"sent": None, "island": "", "windows": [], "approx": False, "revises": "", "cancelled": False}
+    info = {"sent": None, "island": "", "windows": [], "approx": False, "revises": "", "cancelled": False, "doc_ref": ""}
+    if m := RX_REF.search(t):
+        info["doc_ref"] = m.group(1)
     if m := RX_SENT.search(t):
         info["sent"] = _dt(int(m.group(1)), m.group(2), m.group(3), m.group(4))
     if m := RX_REVISION.search(t):
@@ -128,7 +133,12 @@ def parse_text(text: str, kind: str) -> dict:
         elif info["sent"]:                          # no readable event time: excursion notices go out within minutes
             wins.append((info["sent"] - timedelta(minutes=5), info["sent"] - timedelta(minutes=4)))
             info["approx"] = True
+    elif (m := RX_STARTEND.search(t)) and m.group(2)[:3].lower() in MONTHS and m.group(6)[:3].lower() in MONTHS:
+        # outage notices: one overall window
+        wins.append((_dt(int(m.group(1)), m.group(2), m.group(3), m.group(4)), _dt(int(m.group(5)), m.group(6), m.group(7), m.group(8))))
     else:
+        if kind == "hvdc" and info["sent"] and (m := RX_UNTIL.search(t)) and m.group(3)[:3].lower() in MONTHS:
+            wins.append((info["sent"], _dt(int(m.group(2)), m.group(3), m.group(4), m.group(1))))
         for m in RX_DAYRANGE.finditer(t):
             if m.group(2)[:3].lower() not in MONTHS:
                 continue
@@ -184,7 +194,8 @@ def update_notices(warnings: list[str]) -> pd.DataFrame:
             warnings.append(f"notice {n['ref']} ({n['title']}): no affected time found")
         new.append({**n, "sent": info["sent"].isoformat() if info["sent"] else "", "island": info["island"],
                     "windows": json.dumps([[a.isoformat(), b.isoformat()] for a, b in info["windows"]]),
-                    "approx": str(info["approx"]), "revises": info["revises"], "cancelled": str(info["cancelled"]), "v": PARSER_VERSION})
+                    "approx": str(info["approx"]), "revises": info["revises"], "cancelled": str(info["cancelled"]),
+                    "doc_ref": info["doc_ref"], "v": PARSER_VERSION})
     if new:
         store = pd.concat([store, pd.DataFrame(new)], ignore_index=True)
         os.makedirs(os.path.dirname(STORE), exist_ok=True)
@@ -200,7 +211,7 @@ def active_events(store: pd.DataFrame, start: date) -> list[dict]:
     revised = set(store["revises"].replace("", None).dropna())
     out = []
     for _, n in store.iterrows():
-        if n["ref"] in revised or n.get("cancelled") == "True":
+        if n["ref"] in revised or (n.get("doc_ref") or "-") in revised or n.get("cancelled") == "True":
             continue
         for a, b in json.loads(n["windows"] or "[]"):
             if b[:10] < str(start):
