@@ -5,6 +5,8 @@ on:
     # 13:30 UTC = 02:30 NZDT (01:30 NZST). EMI publishes the previous day's cleared offers and
     # interim prices overnight; the pipeline re-processes the last 4 days so prices settle to final.
     - cron: "30 13 * * *"
+    # second pass at 18:00 NZDT (17:00 NZST) to pick up EMI files published late in the day
+    - cron: "0 5 * * *"
   workflow_dispatch:
     inputs:
       from:

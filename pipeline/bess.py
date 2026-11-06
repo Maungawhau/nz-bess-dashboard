@@ -114,7 +114,8 @@ def compute_day(d: date, registry: list[dict], settings: dict, co: pd.DataFrame 
     co = cleared_long(d) if co is None else co
     ep = energy_prices(d)
     if co is None or ep is None:
-        return pd.DataFrame(), [f"{d}: cleared offers or energy prices not yet published"]
+        missing = " and ".join(n for n, x in (("cleared offers", co), ("final energy prices", ep)) if x is None)
+        return pd.DataFrame(), [f"{d}: EMI has not published {missing} yet - will retry on the next run"]
     rp = reserve_prices(d)
     if rp is None:
         warn.append(f"{d}: reserve prices missing - reserve revenue set to 0")

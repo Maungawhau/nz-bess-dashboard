@@ -83,7 +83,7 @@ function dayTags(day, short = true) {
   if (sp) out.push(`<span class="tag sep" title="NI–SI gap up to $${fmtN(Math.abs(sp.max_gap))}/MWh">Islands split ×${sp.sep_tps}</span>`);
   return out.join("") || `<span class="muted">–</span>`;
 }
-function evList(days) {
+function evList(days, target = "#dayEvents") {
   const items = [];
   for (const d of days) for (const e of eventsOn(d)) {
     const k = evKind(e.kind); if (!k && e.kind !== "lrs_early") continue;
@@ -95,7 +95,7 @@ function evList(days) {
     items.push({ key, html: `<a class="ev" href="${e.url}" target="_blank" rel="noopener" title="Open the Transpower notice"><i class="k" style="background:${col};${k ? "" : "border:1px dashed var(--text-muted)"}"></i>${e.title}${e.island ? " (" + isl(e.island) + ")" : ""} · ${when}${e.approx ? " (approx.)" : ""}</a>` });
   }
   for (const d of days) { const sp = D.ev?.days?.[d]; if (sp) items.push({ key: "sep" + d, html: `<span class="ev"><i class="k" style="background:${css("--ev-sep")}"></i>Islands split: ${sp.sep_tps} half-hour${sp.sep_tps > 1 ? "s" : ""}${days.length > 1 ? " on " + DOW[(new Date(d).getUTCDay() + 6) % 7] : ""}, NI–SI gap up to $${fmtN(Math.abs(sp.max_gap))}/MWh</span>` }); }
-  $("#dayEvents").innerHTML = items.length ? `<span class="muted" style="align-self:center">What was going on:</span>` + items.map((x) => x.html).join("") : `<span class="muted">No Transpower notices or island price separation flagged.</span>`;
+  $(target).innerHTML = items.length ? `<span class="muted" style="align-self:center">What was going on:</span>` + items.map((x) => x.html).join("") : `<span class="muted">No Transpower notices or island price separation flagged.</span>`;
 }
 
 function evTable() {
@@ -108,6 +108,72 @@ function evTable() {
     const tot = sum(D.daily.filter((r) => r.bess === b.id && inRange(r))).total_rev;
     return `<tr><td>${swatch(b.id)} ${b.name}</td><td><b>${fmt$(tot)}</b></td><td>${cell(t.lrs, tot)}</td><td>${cell(t.hvdc, tot)}</td><td>${cell(t.sep, tot)}</td><td>${cell(t.event, tot)}</td><td>${cell(t.none, tot)}</td></tr>`;
   }).join("") + "</tbody>";
+}
+
+// =============== LATEST DAY LOOKBACK ===============
+async function latestDay() {
+  const day = D.last, bs = D.bess.filter((b) => D.daily.some((r) => r.bess === b.id && r.date === day));
+  const lag = Math.round((Date.now() - new Date(day + "T12:00:00+13:00")) / 864e5);
+  $("#ydTitle").textContent = `Latest day: ${DOW[(new Date(day).getUTCDay() + 6) % 7]} ${prettyDate(day)}`;
+  $("#ydSub").textContent = `How each battery did on the most recent day EMI has published (${lag <= 1 ? "yesterday" : lag + " days ago"}; cleared-offer files usually arrive 1–2 days after the trading day). Compared with each battery's average over the previous 30 days. Prices are interim until final, usually within 2 business days.`;
+  // table
+  const prev = (id) => D.daily.filter((r) => r.bess === id && r.date < day && r.date >= addDays(day, -30));
+  const rank = (id, v) => { const all = D.daily.filter((r) => r.bess === id && r.date >= addDays(day, -30) && r.date <= day).map((r) => r.total_rev).sort((a, b) => b - a); return all.indexOf(v) + 1; };
+  const H = ["Battery", "Total", "Arbitrage", "Reserves", "vs 30-day average", "Rank in last 30 days", "Sold / bought", "Sell / buy $/MWh", "Peak price"];
+  $("#ydTable").innerHTML = `<thead><tr>${H.map((h, i) => `<th class="${i ? "" : "l"}">${h}</th>`).join("")}</tr></thead><tbody>` + bs.map((b) => {
+    const r = D.daily.find((x) => x.bess === b.id && x.date === day), t = sum([r]), p = prev(b.id), avg = p.length ? p.reduce((a, x) => a + x.total_rev, 0) / p.length : NaN;
+    const diff = t.total_rev - avg, arrow = !isFinite(diff) ? "" : diff >= 0 ? "▲" : "▼";
+    return `<tr class="click" data-b="${b.id}" data-d="${day}"><td>${swatch(b.id)} ${b.name}</td><td><b>${fmt$(t.total_rev)}</b></td><td>${fmt$(t.arbitrage_rev)}</td><td>${fmt$(t.reserve_rev)}</td>
+      <td>${arrow} ${fmt$(Math.abs(diff))} <span class="muted">(avg ${fmt$(avg)})</span></td><td>${rank(b.id, r.total_rev)} of ${Math.min(31, p.length + 1)}</td>
+      <td>${fmtN(t.discharge_mwh)} / ${fmtN(t.charge_mwh)} MWh</td><td>${fmtN(t.sell)} / ${fmtN(t.buy)}</td><td>$${fmtN(r.node_price_max)}</td></tr>`;
+  }).join("") + "</tbody>";
+  evList([day], "#ydEvents");
+  // chart: island prices on top, every battery's MW below (sold above zero, bought below)
+  const tps = (await tpMonth(day.slice(0, 7))).filter((r) => r.date === day);
+  const mk = Object.fromEntries((await mktMonth(day.slice(0, 7))).filter((m) => m.date === day).map((m) => [m.tp, m]));
+  const n = Math.max(...tps.map((r) => r.tp)), idx = [...Array(n)].map((_, i) => i + 1), x = idx.map(tpTime);
+  const by = (id) => Object.fromEntries(tps.filter((r) => r.bess === id).map((r) => [r.tp, r]));
+  const B = Object.fromEntries(bs.map((b) => [b.id, by(b.id)]));
+  const traces = [
+    { type: "scatter", mode: "lines", name: "North Island price (Ōtāhuhu)", x, y: idx.map((tp) => mk[tp]?.ni_price ?? null), line: { color: css("--price"), width: 2, shape: "hv" }, yaxis: "y2" },
+    { type: "scatter", mode: "lines", name: "South Island price (Benmore)", x, y: idx.map((tp) => mk[tp]?.si_price ?? null), line: { color: css("--text-muted"), width: 1.5, dash: "dash", shape: "hv" }, yaxis: "y2" },
+  ];
+  bs.forEach((b) => {
+    traces.push({ type: "bar", name: b.name, legendgroup: b.id, x, y: idx.map((tp) => B[b.id][tp]?.discharge_mw || 0), marker: { color: colorOf(b.id) } });
+    traces.push({ type: "bar", name: b.name + " (charging)", legendgroup: b.id, showlegend: false, x, y: idx.map((tp) => -(B[b.id][tp]?.charge_mw || 0)), marker: { color: tint(colorOf(b.id), 0.4) } });
+  });
+  // event shading (same rules as the Day view)
+  const shapes = [], band = (i0, i1, col) => shapes.push({ type: "rect", xref: "x", yref: "paper", x0: i0 - 0.5, x1: i1 - 0.5, y0: 0, y1: 1, fillcolor: col, line: { width: 0 }, layer: "below" });
+  const ps = D.meta.price_separation || { min_gap: 50, min_ratio: 1.5 };
+  idx.forEach((tp, i) => { const m = mk[tp]; if (!m) return; const hi = Math.max(m.ni_price, m.si_price), lo = Math.max(1, Math.min(m.ni_price, m.si_price));
+    if (Math.abs(m.ni_price - m.si_price) >= ps.min_gap && hi / lo >= ps.min_ratio) band(i, i + 1, css("--ev-sep")); });
+  const d0 = new Date(`${day}T00:00:00Z`).getTime(), pos = (iso) => Math.max(0, Math.min(n, (new Date(iso.slice(0, 16) + ":00Z").getTime() - d0) / 18e5));
+  for (const e of eventsOn(day)) { const k = evKind(e.kind); if (!k || (e.kind === "ufe" && e.approx)) continue;
+    if (k === "event") { const i = pos(e.start) - 0.5; shapes.push({ type: "line", xref: "x", yref: "paper", x0: i, x1: i, y0: 0, y1: 1, line: { color: css("--ev-trip"), width: 1.5, dash: "dot" } }); }
+    else band(Math.floor(pos(e.start)), Math.ceil(pos(e.end)), css(EVK[k][1])); }
+  const ay = layout().yaxis;
+  Plotly.react("ydChart", traces.map((t) => ({ ...t, hoverinfo: "none" })), layout({
+    barmode: "relative", hovermode: "x", bargap: 0.15, margin: { l: 72, r: 16, t: 18, b: 36 }, legend: { orientation: "h", y: -0.1, x: 0 }, shapes,
+    xaxis: { type: "category", nticks: 13, showspikes: true, spikemode: "across", spikethickness: 1, spikedash: "solid", spikecolor: css("--text-muted") },
+    yaxis2: { ...ay, domain: [0.62, 1], tickprefix: "$", rangemode: "tozero", title: { text: "price $/MWh" } },
+    yaxis: { ...ay, domain: [0, 0.54], title: { text: "MW" } },
+    annotations: [["Island prices", 1], ["Batteries: sold above zero, bought below", 0.54]].map(([t, y]) => ({ text: t, xref: "paper", yref: "paper", x: 0, y, xanchor: "left", yanchor: "bottom", showarrow: false, font: { size: 11, color: css("--text-muted") } })),
+  }), cfg);
+  const el = document.getElementById("ydChart"), tip = $("#ydTip");
+  el.removeAllListeners?.("plotly_hover"); el.removeAllListeners?.("plotly_unhover"); el.removeAllListeners?.("plotly_click");
+  el.on("plotly_hover", (ev) => {
+    const tp = idx[ev.points[0].pointIndex], m = mk[tp];
+    const lines = bs.map((b) => { const r = B[b.id][tp]; if (!r) return "";
+      const what = r.discharge_mw > 0.5 ? `sold ${fmtN(r.discharge_mw)} MW` : r.charge_mw > 0.5 ? `bought ${fmtN(r.charge_mw)} MW` : "idle";
+      return tipLine(colorOf(b.id), shortName(b.id), `${what} · ${fmt$(r.arbitrage_rev + r.fir_rev + r.sir_rev)}`); }).join("");
+    tip.innerHTML = `<h4>${tpTime(tp)}–${tpTime(tp + 1)} <span class="muted">· ${prettyDate(day)}</span></h4>
+      ${m ? tipLine(css("--price"), "North Island price", `$${fmtN(m.ni_price, 2)}`) + tipLine(css("--text-muted"), "South Island price", `$${fmtN(m.si_price, 2)}`) : ""}
+      <hr><div class="lbl">Each battery this half-hour (energy · revenue incl. reserves)</div>${lines}
+      <div class="muted" style="margin-top:4px">Click to open a battery's full day</div>`;
+    placeTip(ev, "#ydTip", "#ydCard");
+  });
+  el.on("plotly_unhover", () => (tip.hidden = true));
+  el.on("plotly_click", (ev) => { const t = ev.points.find((p) => p.data.legendgroup); openDay(t ? t.data.legendgroup : bs[0].id, day); });
 }
 
 // =============== OVERVIEW ===============
@@ -251,8 +317,8 @@ function tpMonth(m) {
 }
 const tpTime = (tp) => { const m = (tp - 1) * 30; return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`; };
 const tipLine = (sw, k, v) => `<div class="row"><span>${sw ? `<i class="sw" style="background:${sw}"></i>` : ""}${k}</span><span>${v}</span></div>`;
-function placeTip(ev) {
-  const tip = $("#dayTip"), card = $("#dayCard").getBoundingClientRect(), e = ev.event;
+function placeTip(ev, tipSel = "#dayTip", cardSel = "#dayCard") {
+  const tip = $(tipSel), card = $(cardSel).getBoundingClientRect(), e = ev.event;
   tip.hidden = false;
   let left = e.clientX - card.left + 16, top = e.clientY - card.top + 12;
   if (left + tip.offsetWidth > card.width - 8) left = e.clientX - card.left - tip.offsetWidth - 16;
@@ -429,7 +495,7 @@ function init() {
   segClick("#perSplit", (d) => { S.split = d.s; perChart(D.daily.filter((r) => S.sel.has(r.bess) && inRange(r))); });
   segClick("#hourMode", (d) => { S.hour = d.h; hourChart(); });
   segClick("#dayMode", (d) => setDayMode(d.m));
-  ["#topArb", "#topRes", "#cmpTable"].forEach((s) => $(s).addEventListener("click", (e) => { const tr = e.target.closest("tr.click"); if (tr) openDay(tr.dataset.b, tr.dataset.d); }));
+  ["#topArb", "#topRes", "#cmpTable", "#ydTable"].forEach((s) => $(s).addEventListener("click", (e) => { const tr = e.target.closest("tr.click"); if (tr) openDay(tr.dataset.b, tr.dataset.d); }));
   const shift = (n) => { const step = S.dayMode === "week" ? 7 : 1; let v = addDays($("#dayPick").value, n * step); v = v < first ? first : v > last ? last : v; $("#dayPick").value = v; dayOrWeek(); };
   $("#dayPrev").onclick = () => shift(-1); $("#dayNext").onclick = () => shift(1);
   $("#dayPick").onchange = dayOrWeek;
@@ -443,6 +509,6 @@ function init() {
   [D.bess, D.daily, D.hourly, D.meta] = await Promise.all(["bess.json", "daily.json", "hourly.json", "meta.json"].map(get));
   D.ev = await get("events.json").catch(() => ({ events: [], days: {}, tagrev: { rows: [] } }));
   if (!D.daily.length) { $("#coverage").textContent = "No data yet: the first nightly run hasn't completed."; return; }
-  init(); setTab("overview");
-  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => setTab(S.tab));
+  init(); setTab("overview"); latestDay();
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { setTab(S.tab); latestDay(); });
 })();
