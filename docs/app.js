@@ -66,6 +66,7 @@ const shortName = (id) => bess(id).name.replace(/ BESS$/, "");
 const EVK = { lrs: ["Low residual", "--ev-lrs"], hvdc: ["HVDC", "--ev-hvdc"], sep: ["Islands split", "--ev-sep"], event: ["Trip / frequency", "--ev-trip"] };
 const evKind = (k) => (k === "lrs" ? "lrs" : k === "hvdc" ? "hvdc" : ["freq", "trip", "ufe"].includes(k) ? "event" : null);
 const hm = (iso) => iso.slice(11, 16);
+const isl = (i) => ({ NZ: "national", NI: "NI", SI: "SI" }[i] || "");
 function eventsOn(day) {
   const a = `${day}T00:00`, b = `${addDays(day, 1)}T00:00`;
   return (D.ev?.events || []).filter((e) => e.start < b && e.end > a);
@@ -74,7 +75,7 @@ function dayTags(day, short = true) {
   const out = [], seen = new Set();
   for (const e of eventsOn(day)) {
     const k = evKind(e.kind); if (!k || (e.kind === "ufe" && e.approx)) continue;
-    const t = k === "event" ? `${e.kind === "freq" ? "Freq." : "Trip"} ${hm(e.start)}` : k === "lrs" ? `Low residual ${hm(e.start)}–${hm(e.end)}${e.island ? " " + e.island : ""}` : "HVDC";
+    const t = k === "event" ? `${e.kind === "freq" ? "Freq." : "Trip"} ${hm(e.start)}` : k === "lrs" ? `Low residual ${hm(e.start)}–${hm(e.end)}${e.island ? " " + isl(e.island) : ""}` : "HVDC";
     if (seen.has(t)) continue; seen.add(t);
     out.push(`<span class="tag ${k}" title="${e.title.replace(/"/g, "")}">${t}</span>`);
   }
@@ -91,7 +92,7 @@ function evList(days) {
       ? `${days.length > 1 ? DOW[(new Date(e.start.slice(0, 10)).getUTCDay() + 6) % 7] + " " : ""}${hm(e.start)}${k === "event" ? "" : "–" + hm(e.end)}`
       : `${prettyDate(e.start.slice(0, 10))} ${hm(e.start)} → ${prettyDate(e.end.slice(0, 10))} ${hm(e.end)}`;
     const col = k ? css(EVK[k][1]) : "transparent";
-    items.push({ key, html: `<a class="ev" href="${e.url}" target="_blank" rel="noopener" title="Open the Transpower notice"><i class="k" style="background:${col};${k ? "" : "border:1px dashed var(--text-muted)"}"></i>${e.title}${e.island ? " (" + e.island + ")" : ""} · ${when}${e.approx ? " (approx.)" : ""}</a>` });
+    items.push({ key, html: `<a class="ev" href="${e.url}" target="_blank" rel="noopener" title="Open the Transpower notice"><i class="k" style="background:${col};${k ? "" : "border:1px dashed var(--text-muted)"}"></i>${e.title}${e.island ? " (" + isl(e.island) + ")" : ""} · ${when}${e.approx ? " (approx.)" : ""}</a>` });
   }
   for (const d of days) { const sp = D.ev?.days?.[d]; if (sp) items.push({ key: "sep" + d, html: `<span class="ev"><i class="k" style="background:${css("--ev-sep")}"></i>Islands split: ${sp.sep_tps} half-hour${sp.sep_tps > 1 ? "s" : ""}${days.length > 1 ? " on " + DOW[(new Date(d).getUTCDay() + 6) % 7] : ""}, NI–SI gap up to $${fmtN(Math.abs(sp.max_gap))}/MWh</span>` }); }
   $("#dayEvents").innerHTML = items.length ? `<span class="muted" style="align-self:center">What was going on:</span>` + items.map((x) => x.html).join("") : `<span class="muted">No Transpower notices or island price separation flagged.</span>`;

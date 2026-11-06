@@ -5,6 +5,7 @@ This dashboard shows how New Zealand's grid-scale batteries are dispatched and w
 - **Revenue** per battery and in total: energy arbitrage plus FIR and SIR reserves, viewable by day, week, month or year
 - **Volumes and prices**: MWh charged and discharged, average buy and sell prices, spread, cycles and round-trip efficiency
 - **When they make money**: a daily revenue calendar, revenue by hour of day, and the best 10 days for arbitrage and for reserves
+- **What was going on**: every half-hour is tagged with Transpower system events (low residual CANs, HVDC outages, trips and frequency excursions) and with North/South Island price separation. The tags show up as bands on the Day view, in the best-days tables, and in a "revenue earned during events" table. They show what coincided, not what caused it.
 - **How each battery is run**: a Day view (48 half-hours: price, energy bought and sold, reserves held) and a Week view (daily totals), both with hover breakdowns
 - **Phase 2 (parked)**: what the batteries push out of the merit order. The code is in `pipeline/displacement.py`, but it is switched off (`run_displacement: false`) because a reliable answer needs a constraint-aware market re-run (vSPD).
 
@@ -14,6 +15,7 @@ This dashboard shows how New Zealand's grid-scale batteries are dispatched and w
 GitHub Actions (02:30 NZT nightly)
    └─ pipeline/build.py   downloads yesterday's EMI files, re-does the last 4 days (interim → final prices)
         ├─ pipeline/bess.py          discharge / charge / reserves / revenue per battery per half-hour
+        ├─ pipeline/events.py        Transpower CAN + Excursion notices (PDFs, cached in data/events/) and NI/SI prices
         └─ pipeline/displacement.py  (phase 2, off) merit-order shift on the offer stack
    └─ commits data/processed/ (half-hourly history) and docs/data/ (dashboard JSON)
 GitHub Pages serves docs/ → the dashboard
@@ -27,6 +29,7 @@ GitHub Pages serves docs/ → the dashboard
 | DispatchAndPricing/NodalPricesAndVolumes | Charging (dispatched load on the offtake unit) |
 | BidsAndOffers/Offers | Offer stack for the displacement analysis |
 | Generation/GenerationFleet/Existing | Fuel tags and automatic detection of new batteries |
+| Transpower Customer Advice Notices and Excursion Notices (transpower.co.nz) | Low residual windows, HVDC outages and reduced capability, trips and frequency excursions |
 
 ## Adding a new battery
 
@@ -61,8 +64,12 @@ EMI_LOCAL_DIR=tests/fixtures BESS_CONFIG=tests/bess_test.yaml python -m pipeline
 - **Charging.** Each battery has an injection unit and an offtake unit in EMI (e.g. Ruakākā RUK0/RUK99), and charging is the dispatched load on the offtake unit. The EA's decision moves batteries to a single bid/offer form from 31 March 2028; when that happens the unit mapping will need updating.
 - **Displacement is parked.** A merit-order shift ignores transmission constraints, the HVDC link, energy/reserve co-optimisation and unit commitment, so it isn't shown. To rebuild the dashboard files from saved data without downloading anything, run `python -m pipeline.build --publish-only`, or start the nightly workflow with *publish_only* ticked.
 
+## System event tags
+
+`pipeline/events.py` reads Transpower's CAN and Excursion Notice list pages each night, downloads notices it hasn't seen (PDFs) and extracts the affected times. Parsed notices are cached in `data/events/notices.csv`. Bumping `PARSER_VERSION` makes the job re-read them all. Revised notices replace the original, and cancelled notices are dropped. If the Transpower page layout changes, the run keeps the stored notices and adds a warning to the data notes. `tools/print_notices.py` (via the *Probe Transpower notices* workflow) prints notice text for debugging. Island separation thresholds are in `config/bess.yaml` under `price_separation`.
+
 ## Next iteration ideas
 
-- Overlays for context: Transpower customer advice notices and low residual situation notices, weather (wind and solar lulls, cold snaps), and HVDC transfer
+- More context: weather (wind and solar lulls, cold snaps) and HVDC transfer volumes
 - Battery position in the offer stack: the price of the battery's highest cleared tranche against the marginal price
 - A vSPD re-run of tight periods without the batteries, for a constraint-aware counterfactual
