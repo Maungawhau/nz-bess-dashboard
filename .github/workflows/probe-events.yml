@@ -10,4 +10,4 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install requests pypdf pandas pyyaml
-      - run: python tools/print_notices.py hvdc
+      - run: python tools/list_emi.py
