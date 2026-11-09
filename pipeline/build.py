@@ -85,7 +85,17 @@ def _write_parts(name, df):
             f"{PROC}/{name}/{m}.csv.gz", index=False)
 
 
-def dates_to_run(settings, done: set, start=None, end=None):
+INTERIM_FILE = f"{PROC}/interim_days.json"
+
+
+def load_interim() -> set:
+    try:
+        return {pd.Timestamp(x).date() for x in json.load(open(INTERIM_FILE))}
+    except (FileNotFoundError, ValueError):
+        return set()
+
+
+def dates_to_run(settings, done: set, start=None, end=None, interim: set = frozenset()):
     yesterday = datetime.now(NZ).date() - timedelta(days=1)
     if start:
         s, e = start, end or yesterday
@@ -94,7 +104,7 @@ def dates_to_run(settings, done: set, start=None, end=None):
     allds = [s + timedelta(days=i) for i in range((yesterday - s).days + 1)]
     recent = set(allds[-settings["reprocess_days"]:])
     missing = [d for d in allds if d not in done and d not in recent][: settings["max_new_days_per_run"]]
-    return sorted(set(missing) | recent)
+    return sorted(set(missing) | recent | set(interim))     # days still on interim prices are retried until final
 
 
 def run(start=None, end=None, skip_displacement=False, publish_only=False):
@@ -111,7 +121,8 @@ def run(start=None, end=None, skip_displacement=False, publish_only=False):
     tp_all = _read_parts("tp")
     disp_all = _read_parts("displacement")
     done = set(tp_all["date"]) if not tp_all.empty else set()
-    days = dates_to_run(settings, done, start, end)
+    interim = load_interim()
+    days = dates_to_run(settings, done, start, end, interim)
     print(f"processing {len(days)} day(s): {days[:1]} .. {days[-1:]}")
 
     market = _read_parts("market")
@@ -126,6 +137,10 @@ def run(start=None, end=None, skip_displacement=False, publish_only=False):
                 continue
             new_tp.append(t)
             done_days.append(d)
+            if {("energy_prices", d), ("reserve_prices", d)} & emi.INTERIM_USED:
+                interim.add(d)
+            else:
+                interim.discard(d)
             new_mkt.append(E.market_day(B.energy_prices(d), B.reserve_prices(d), d, settings))
             if not skip_displacement:
                 x = D.compute_day(d, co, t, registry, fmap, settings)
@@ -137,6 +152,11 @@ def run(start=None, end=None, skip_displacement=False, publish_only=False):
             print(f"  {d}: FAILED {e}")
         finally:
             emi.clear_cache()
+
+    os.makedirs(PROC, exist_ok=True)
+    with open(INTERIM_FILE, "w") as f:
+        json.dump(sorted(str(x) for x in interim), f)
+    settings["_interim_days"] = sorted(str(x) for x in interim)
 
     # island prices for days in the history that don't have them yet (price files only - fast)
     hist_days = sorted(set(tp_all["date"]) if not tp_all.empty else set())
@@ -260,6 +280,7 @@ def publish(tp, disp, registry, settings, warnings, market=None, events=None):
         "last_date": str(tp["date"].max()) if not tp.empty else None,
         "settings": {k: settings[k] for k in ("tight_market", "reference_nodes")},
         "tp_months": sorted(months),
+        "interim_days": settings.get("_interim_days", []),
         "price_separation": settings.get("price_separation", {"min_gap": 50, "min_ratio": 1.5}),
         "warnings": sorted(set(warnings))[-60:],
     }

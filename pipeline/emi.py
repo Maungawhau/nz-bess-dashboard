@@ -144,15 +144,27 @@ def list_blobs(prefix: str) -> tuple[str, ...]:
     return tuple(names)
 
 
+INTERIM_USED: set = set()     # (key, date) pairs read from an interim (_I) file in this run
+
+
 def find_file(key: str, d: date) -> str | None:
-    """Blob path of the daily file for dataset `key` and trading date d (any sub-folder)."""
+    """Blob path of the daily file for dataset `key` and trading date d (any sub-folder).
+
+    Price files are first published as interim (`..._I.csv`) and renamed when declared final
+    (usually within 2 business days). Final is preferred; interim is used when that's all there is.
+    """
     folder, suffix = DATASETS[key]
     stamp = d.strftime("%Y%m%d")
-    for prefix in (f"{ROOT}/{folder}/{d.year}/", f"{ROOT}/{folder}/"):
-        for n in list_blobs(prefix):
-            fn = n.rsplit("/", 1)[-1]
-            if fn.startswith(stamp) and fn.endswith(suffix):
-                return n
+    for want, interim in ((suffix, False), (suffix.replace(".csv", "_I.csv"), True)):
+        for prefix in (f"{ROOT}/{folder}/{d.year}/", f"{ROOT}/{folder}/"):
+            for n in list_blobs(prefix):
+                fn = n.rsplit("/", 1)[-1]
+                if fn.startswith(stamp) and fn.endswith(want):
+                    if interim:
+                        INTERIM_USED.add((key, d))
+                    else:
+                        INTERIM_USED.discard((key, d))
+                    return n
     # listing failed / empty -> try the conventional locations directly
     for cand in (f"{ROOT}/{folder}/{d.year}/{stamp}{suffix}", f"{ROOT}/{folder}/{stamp}{suffix}"):
         if _exists(cand):

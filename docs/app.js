@@ -115,7 +115,9 @@ async function latestDay() {
   const day = D.last, bs = D.bess.filter((b) => D.daily.some((r) => r.bess === b.id && r.date === day));
   const lag = Math.round((Date.now() - new Date(day + "T12:00:00+13:00")) / 864e5);
   $("#ydTitle").textContent = `Latest day: ${DOW[(new Date(day).getUTCDay() + 6) % 7]} ${prettyDate(day)}`;
-  $("#ydSub").textContent = `How each battery did on the most recent day EMI has published (${lag <= 1 ? "yesterday" : lag + " days ago"}; cleared-offer files usually arrive 1–2 days after the trading day). Compared with each battery's average over the previous 30 days. Prices are interim until final, usually within 2 business days.`;
+  const interim = (D.meta.interim_days || []).includes(day);
+  $("#ydSub").textContent = `How each battery did on the most recent day EMI has published (${lag <= 1 ? "yesterday" : lag + " days ago"}), compared with its average over the previous 30 days. ` +
+    (interim ? "Prices for this day are still interim; the figures update automatically once EMI declares them final (usually within 2 business days)." : "Prices for this day are final.");
   // table
   const prev = (id) => D.daily.filter((r) => r.bess === id && r.date < day && r.date >= addDays(day, -30));
   const rank = (id, v) => { const all = D.daily.filter((r) => r.bess === id && r.date >= addDays(day, -30) && r.date <= day).map((r) => r.total_rev).sort((a, b) => b - a); return all.indexOf(v) + 1; };
@@ -471,7 +473,8 @@ function init() {
   const dates = D.daily.map((r) => r.date).sort(), first = dates[0], last = dates[dates.length - 1];
   D.first = first; D.last = last;
   S.from = first; S.to = last;
-  $("#coverage").textContent = `Data ${prettyDate(first)} – ${prettyDate(last)} · updated ${D.meta.generated_utc.replace("T", " ")} UTC`;
+  const nI = (D.meta.interim_days || []).length;
+  $("#coverage").textContent = `Data ${prettyDate(first)} – ${prettyDate(last)} · updated ${D.meta.generated_utc.replace("T", " ")} UTC` + (nI ? ` · latest ${nI} day${nI > 1 ? "s" : ""} on interim prices` : "");
   ["#from", "#to", "#dayPick"].forEach((s) => { $(s).min = first; $(s).max = last; });
   $("#from").value = first; $("#to").value = last; $("#dayPick").value = last;
 
